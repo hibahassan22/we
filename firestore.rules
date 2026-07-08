@@ -1,0 +1,166 @@
+rules_version = '2';
+
+
+
+service cloud.firestore {
+
+  match /databases/{database}/documents {
+
+
+
+    function isSignedIn() {
+
+      return request.auth != null;
+
+    }
+
+
+
+    function userExists() {
+
+      return isSignedIn()
+
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid));
+
+    }
+
+
+
+    function userData() {
+
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+
+    }
+
+
+
+    function hasAdminClaim() {
+
+      return isSignedIn() && request.auth.token.role == 'admin';
+
+    }
+
+
+
+    function isAdmin() {
+
+      return isSignedIn() && (
+
+        hasAdminClaim()
+
+        || (userExists() && userData().role == 'admin')
+
+      );
+
+    }
+
+
+
+    function isActiveUser() {
+
+      return isSignedIn() && (
+
+        hasAdminClaim()
+
+        || (userExists() && userData().status == 'active')
+
+      );
+
+    }
+
+
+
+    match /users/{userId} {
+
+      allow read: if isAdmin() || (isSignedIn() && request.auth.uid == userId);
+
+      allow create: if false;
+
+      allow update: if isAdmin()
+
+        || (isSignedIn() && request.auth.uid == userId
+
+            && !request.resource.data.diff(resource.data).affectedKeys()
+
+              .hasAny(['role', 'permissions', 'createdBy', 'createdAt', 'status']));
+
+      allow delete: if isAdmin();
+
+    }
+
+
+
+    match /roles/{roleId} {
+
+      allow read: if isSignedIn() && isActiveUser();
+
+      allow write: if isAdmin();
+
+    }
+
+
+
+    match /permissions/{permId} {
+
+      allow read: if isSignedIn() && isActiveUser();
+
+      allow write: if isAdmin();
+
+    }
+
+
+
+    match /departments/{deptId} {
+
+      allow read: if isSignedIn() && isActiveUser();
+
+      allow write: if isAdmin();
+
+    }
+
+
+
+    match /activityLogs/{logId} {
+
+      allow read: if isAdmin();
+
+      allow create: if isSignedIn() && isActiveUser();
+
+      allow update, delete: if false;
+
+    }
+
+
+
+    match /notifications/{notifId} {
+
+      allow read: if isSignedIn() && isActiveUser();
+
+      allow create: if isAdmin() || isSignedIn();
+
+      allow update: if isSignedIn() && isActiveUser();
+
+      allow delete: if isAdmin();
+
+    }
+
+
+
+    match /staffRoles/{staffId} {
+
+      allow read: if isSignedIn();
+
+      allow create, update: if isAdmin()
+        && request.resource.data.keys().hasOnly(['role', 'salesId', 'updatedAt'])
+        && request.resource.data.role is string
+        && request.resource.data.role.size() > 0
+        && request.resource.data.salesId is string
+        && request.resource.data.salesId.size() > 0;
+
+      allow delete: if isAdmin();
+
+    }
+
+  }
+
+}
