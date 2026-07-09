@@ -1,10 +1,12 @@
-﻿import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import {
   CheckCircle2, XCircle, ArrowRight,
   RefreshCw, Pencil, Plus, Image as ImageIcon,
+  Users, UserPlus, UserCheck, Trash2,
 } from "lucide-react";
 import { useToast, toast as globalToast } from "../lib/toast";
+import { ConfirmModal } from "./ui/AppModal";
 import AddPaymentModal from "./AddPaymentModal";
 import EditOfferedTripModal from "./EditOfferedTripModal";
 import TripNoteModal from "./trip-details/TripNoteModal";
@@ -12,10 +14,16 @@ import TripRefundModal from "./trip-details/TripRefundModal";
 import TripChangeStatusModal from "./trip-details/TripChangeStatusModal";
 import CustomerProfileModal from "./trip-details/CustomerProfileModal";
 import DriverProfileModal from "./trip-details/DriverProfileModal";
+import SalesProfileModal from "./trip-details/SalesProfileModal";
+import TripPassengerModal from "./trip-details/TripPassengerModal";
+import AssignTripModal from "./AssignTripModal";
 import ImageProofModal from "./trip-details/ImageProofModal";
 import {
   fetchTripDetailsById,
   normalizeWithoutDriverTrip,
+  extractTripPassengers,
+  hasAssignedDriver,
+  requestDeletePassenger,
 } from "../services/tripService.js";
 import { loadTripPayments, saveTripPayment } from "../lib/tripPaymentProofs.js";
 
@@ -181,30 +189,43 @@ function FieldCol({ label, value, dir }) {
   );
 }
 
-function PersonCard({ title, name, phone, onProfile }) {
+function PersonCard({ title, name, phone, onProfile, profileDisabled, emptyMessage, primaryAction }) {
   return (
     <div className="bg-white border border-gray-200 rounded-[1.2rem] p-5 shadow-sm text-right h-full flex flex-col">
       <h4 className="font-bold text-gray-800 text-sm mb-4 border-b border-gray-100 pb-2 text-center">{title}</h4>
-      <div className="space-y-3 text-xs text-gray-600 mb-5 flex-1">
-        <div className="flex items-center justify-between gap-3">
-          <span className="font-medium text-gray-800">{name ?? "—"}</span>
-          <span className="text-gray-400 flex items-center gap-1 shrink-0">
-            الاسم
-            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" /></svg>
-          </span>
+      {emptyMessage ? (
+        <p className="text-gray-400 text-xs text-center flex-1 py-4">{emptyMessage}</p>
+      ) : (
+        <div className="space-y-3 text-xs text-gray-600 mb-5 flex-1">
+          <div className="flex items-center justify-between gap-3">
+            <span className="font-medium text-gray-800">{name ?? "—"}</span>
+            <span className="text-gray-400 flex items-center gap-1 shrink-0">
+              الاسم
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" /></svg>
+            </span>
+          </div>
+          <div className="flex items-center justify-between gap-3">
+            <span className="font-medium text-gray-800" dir="ltr">{phone ?? "—"}</span>
+            <span className="text-gray-400 flex items-center gap-1 shrink-0">
+              الهاتف
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" /></svg>
+            </span>
+          </div>
         </div>
-        <div className="flex items-center justify-between gap-3">
-          <span className="font-medium text-gray-800" dir="ltr">{phone ?? "—"}</span>
-          <span className="text-gray-400 flex items-center gap-1 shrink-0">
-            الهاتف
-            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" /></svg>
-          </span>
-        </div>
+      )}
+      <div className="space-y-2">
+        {primaryAction}
+        {!emptyMessage && (
+          <button
+            type="button"
+            onClick={onProfile}
+            disabled={profileDisabled}
+            className="w-full border border-gray-200 text-gray-500 rounded-xl py-2 text-xs font-semibold hover:bg-gray-50 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            عرض الملف الشخصي
+          </button>
+        )}
       </div>
-      <button type="button" onClick={onProfile}
-        className="w-full border border-gray-200 text-gray-500 rounded-xl py-2 text-xs font-semibold hover:bg-gray-50 transition-colors">
-        عرض الملف الشخصي
-      </button>
     </div>
   );
 }
@@ -276,7 +297,15 @@ function PaymentCard({ payment, onShowProof }) {
   );
 }
 
-// ── Main Page ─────────────────────────────────────────────────
+function mapOperationDayIds(days) {
+  if (!Array.isArray(days)) return [];
+  const map = {
+    السبت: "sat", الأحد: "sun", الاثنين: "mon", الثلاثاء: "tue",
+    الأربعاء: "wed", الخميس: "thu", الجمعة: "fri",
+    sat: "sat", sun: "sun", mon: "mon", tue: "tue", wed: "wed", thu: "thu", fri: "fri",
+  };
+  return days.map((d) => map[d] ?? d).filter(Boolean);
+}
 
 export default function TripDetailsPage() {
   const navigate = useNavigate();
@@ -296,6 +325,12 @@ export default function TripDetailsPage() {
   const [showEdit, setShowEdit] = useState(false);
   const [showCustomerProfile, setShowCustomerProfile] = useState(false);
   const [showDriverProfile, setShowDriverProfile] = useState(false);
+  const [showSalesProfile, setShowSalesProfile] = useState(false);
+  const [showPassengerModal, setShowPassengerModal] = useState(false);
+  const [showAssignDriver, setShowAssignDriver] = useState(false);
+  const [passengerProfileId, setPassengerProfileId] = useState(null);
+  const [deletePassenger, setDeletePassenger] = useState(null);
+  const [deletePassengerLoading, setDeletePassengerLoading] = useState(false);
   const [proofImageUrl, setProofImageUrl] = useState(null);
   const [localPayments, setLocalPayments] = useState(() => loadTripPayments(tripId));
 
@@ -377,6 +412,29 @@ export default function TripDetailsPage() {
     await fetchTrip({ silent: true });
   };
 
+  const handleDeletePassenger = async () => {
+    if (!deletePassenger?.customerId && !deletePassenger?.passengerId) return;
+    setDeletePassengerLoading(true);
+    try {
+      await requestDeletePassenger({
+        tripId,
+        customerId: deletePassenger.customerId,
+        passengerId: deletePassenger.passengerId,
+      });
+      toast.success("تم إرسال طلب حذف الراكب لمركز الموافقات");
+      setDeletePassenger(null);
+    } catch (err) {
+      const msg = err.message || "فشل إرسال طلب الحذف";
+      toast.error(
+        msg.includes("not found") || msg.includes("غير موجود") || msg.includes("لم يتم")
+          ? "الراكب غير مرتبط بهذه الرحلة — تأكدي أنه مضاف فعلياً وليس مجرد طلب معلق"
+          : msg
+      );
+    } finally {
+      setDeletePassengerLoading(false);
+    }
+  };
+
   if (loading) {
     return (
       <div className="flex justify-center items-center py-24" dir="rtl">
@@ -413,14 +471,25 @@ export default function TripDetailsPage() {
     trip.customer?.phone ??
     trip.customer_phone ??
     "—";
-  const customerId = trip.main_passenger?.id ?? trip.customer_id;
+  const customerId =
+    trip.main_passenger?.customer_id ??
+    trip["الراكب الاساسى"]?.customer_id ??
+    trip["الراكب الأساسي"]?.customer_id ??
+    trip.customer_id;
   const operatingDays = Array.isArray(trip.operation_days) && trip.operation_days.length
     ? trip.operation_days
     : (Array.isArray(trip.days) ? trip.days : []);
-  const primaryEmployee = Array.isArray(trip.sales) && trip.sales[0]?.name ? trip.sales[0].name : "—";
+  const salesRecord = Array.isArray(trip.sales) && trip.sales.length ? trip.sales[0] : null;
+  const salesId = salesRecord?.id ?? trip.sales_ids?.[0] ?? trip.sales_id;
+  const salesName = salesRecord?.name ?? trip.assisted_by ?? "—";
+  const salesPhone = salesRecord?.phone ?? "—";
   const tripStatus = normalizeTripStatus(trip);
   const assistedBy = trip.assisted_by ?? "—";
   const ourCommission = Number(trip.our_commission ?? 0);
+  const passengers = extractTripPassengers(trip);
+  const tripHasDriver = hasAssignedDriver(trip);
+  const driverId = trip.driver?.id ?? trip.driver_id;
+  const operationDayIds = mapOperationDayIds(trip.operation_days ?? trip.days);
 
   return (
     <div className="w-full flex flex-col gap-5" dir="rtl">
@@ -514,9 +583,85 @@ export default function TripDetailsPage() {
               <div>
                 <SectionTitle>الموظفين</SectionTitle>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <FieldCol label="مندوب المبيعات:" value={primaryEmployee} />
+                  <div>
+                    <FieldCol label="مندوب المبيعات:" value={salesName} />
+                    {salesId && (
+                      <button
+                        type="button"
+                        onClick={() => setShowSalesProfile(true)}
+                        className="mt-2 text-[11px] text-[#c9a84c] font-semibold hover:underline"
+                      >
+                        عرض ملف مندوب المبيعات
+                      </button>
+                    )}
+                  </div>
                   <FieldCol label="مساعدة بواسطة:" value={assistedBy} />
                 </div>
+              </div>
+              <hr className="border-gray-200" />
+              <div>
+                <div className="flex justify-between items-center gap-3 mb-3 flex-wrap">
+                  <SectionTitle>الركاب</SectionTitle>
+                  <button
+                    type="button"
+                    onClick={() => setShowPassengerModal(true)}
+                    className="inline-flex items-center gap-1.5 bg-[#4a4746] text-white text-[11px] font-bold px-3.5 py-2 rounded-xl hover:bg-[#383534] transition-colors"
+                  >
+                    <UserPlus className="w-3.5 h-3.5" /> إضافة راكب
+                  </button>
+                </div>
+                {passengers.length === 0 ? (
+                  <p className="text-center text-gray-400 text-xs py-6 bg-white rounded-xl border border-gray-100">
+                    لا يوجد ركاب مسجّلون لهذه الرحلة
+                  </p>
+                ) : (
+                  <div className="space-y-2">
+                    {passengers.map((p, index) => (
+                      <div
+                        key={p.passengerId ?? p.customerId ?? `${p.name}-${index}`}
+                        className="bg-white border border-gray-100 rounded-xl px-4 py-3 flex items-center justify-between gap-3 flex-wrap"
+                      >
+                        <div className="flex items-center gap-2 min-w-0">
+                          <Users className="w-4 h-4 text-[#c9a84c] shrink-0" />
+                          <div className="text-right min-w-0">
+                            <p className="text-sm font-semibold text-gray-800 truncate">
+                              {p.name}
+                              {p.isMain && (
+                                <span className="mr-2 text-[10px] font-bold text-amber-600 bg-amber-50 border border-amber-100 px-2 py-0.5 rounded-md">
+                                  راكب رئيسي
+                                </span>
+                              )}
+                            </p>
+                            <p className="text-[11px] text-gray-400" dir="ltr">{p.phone}</p>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-3 shrink-0">
+                          {p.customerId && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setPassengerProfileId(p.customerId);
+                                setShowCustomerProfile(true);
+                              }}
+                              className="text-[11px] text-[#c9a84c] font-semibold hover:underline"
+                            >
+                              عرض الملف الشخصي
+                            </button>
+                          )}
+                          {(p.passengerId || p.customerId) && (
+                            <button
+                              type="button"
+                              onClick={() => setDeletePassenger(p)}
+                              className="inline-flex items-center gap-1 text-[11px] text-red-500 font-semibold hover:text-red-600"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" /> حذف
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
                 <div className="bg-[#eef6ff] border border-blue-100 rounded-xl p-5 text-center">
@@ -622,13 +767,40 @@ export default function TripDetailsPage() {
         </div>
       </div>
 
-      {/* بطاقات السائق والعميل — أسفل الكارت الرئيسي */}
+      {/* بطاقات السائق والعميل ومندوب المبيعات */}
       {activeTab === "trip" && (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <PersonCard title="معلومات السائق" name={dName ?? "—"} phone={trip.driver?.phone}
-            onProfile={() => trip.driver?.id && setShowDriverProfile(true)} />
-          <PersonCard title="معلومات العميل" name={customerName} phone={customerPhone}
-            onProfile={() => customerId && setShowCustomerProfile(true)} />
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <PersonCard
+            title="معلومات السائق"
+            name={tripHasDriver ? (dName ?? "—") : null}
+            phone={trip.driver?.phone}
+            emptyMessage={!tripHasDriver ? "لا يوجد سائق مسند لهذه الرحلة" : null}
+            profileDisabled={!driverId}
+            onProfile={() => driverId && setShowDriverProfile(true)}
+            primaryAction={!tripHasDriver ? (
+              <button
+                type="button"
+                onClick={() => setShowAssignDriver(true)}
+                className="w-full inline-flex items-center justify-center gap-1.5 bg-[#c9a84c] text-white rounded-xl py-2 text-xs font-semibold hover:bg-[#b8953f] transition-colors"
+              >
+                <UserCheck className="w-3.5 h-3.5" /> إسناد سائق
+              </button>
+            ) : null}
+          />
+          <PersonCard
+            title="معلومات العميل"
+            name={customerName}
+            phone={customerPhone}
+            profileDisabled={!customerId}
+            onProfile={() => customerId && setShowCustomerProfile(true)}
+          />
+          <PersonCard
+            title="مندوب المبيعات"
+            name={salesName}
+            phone={salesPhone}
+            profileDisabled={!salesId}
+            onProfile={() => salesId && setShowSalesProfile(true)}
+          />
         </div>
       )}
 
@@ -666,13 +838,43 @@ export default function TripDetailsPage() {
 
       <CustomerProfileModal
         isOpen={showCustomerProfile}
-        onClose={() => setShowCustomerProfile(false)}
-        customerId={customerId}
+        onClose={() => {
+          setShowCustomerProfile(false);
+          setPassengerProfileId(null);
+        }}
+        customerId={passengerProfileId ?? customerId}
       />
       <DriverProfileModal
         isOpen={showDriverProfile}
         onClose={() => setShowDriverProfile(false)}
-        driverId={trip?.driver?.id ?? trip?.driver_id}
+        driverId={driverId}
+      />
+      <SalesProfileModal
+        isOpen={showSalesProfile}
+        onClose={() => setShowSalesProfile(false)}
+        salesId={salesId}
+      />
+      <TripPassengerModal
+        isOpen={showPassengerModal}
+        onClose={() => setShowPassengerModal(false)}
+        tripId={tripId}
+        defaultDays={operationDayIds}
+        onSuccess={() => fetchTrip({ silent: true })}
+      />
+      <AssignTripModal
+        isOpen={showAssignDriver}
+        onClose={() => setShowAssignDriver(false)}
+        tripId={tripId}
+        onSuccess={() => fetchTrip({ silent: true })}
+      />
+      <ConfirmModal
+        isOpen={!!deletePassenger}
+        onClose={() => !deletePassengerLoading && setDeletePassenger(null)}
+        onConfirm={handleDeletePassenger}
+        title="طلب حذف راكب"
+        message={`هل تريد إرسال طلب حذف «${deletePassenger?.name ?? "الراكب"}» لمركز الموافقات؟ لن يُحذف الراكب إلا بعد الموافقة.`}
+        confirmLabel="إرسال الطلب"
+        isSubmitting={deletePassengerLoading}
       />
       <ImageProofModal
         isOpen={!!proofImageUrl}

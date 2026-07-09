@@ -1,9 +1,19 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { useGlobalSearch } from "../hooks/useGlobalSearch";
 import { filterByGlobalSearch } from "../lib/searchUtils";
 import { usePermissions } from "../hooks/usePermissions.js";
 import { PERMISSIONS } from "../lib/permissions.js";
+import { useAuth } from "../hooks/useAuth.js";
+import { useToast } from "../lib/toast.jsx";
 import AppModal, { ModalField, ModalActions, modalInputClass, ConfirmModal } from "./ui/AppModal";
+import {
+  fetchTripChatsList,
+  fetchTripChatMessages,
+  sendTripChatMessage,
+  resolveDriverIdFromChat,
+  formatChatTime,
+  driverDisplayName,
+} from "../services/tripChatService.js";
 
 const BASE = "https://drivo1.elmoroj.com/api";
 
@@ -272,26 +282,20 @@ const DeleteModal = ({ isOpen, onClose, onConfirm, loading }) => (
   />
 );
 
-// ── Chat mock data ────────────────────────────────────────────
-const driversChats = [
-  { id:1, name:"محمد العتيبي", message:"شكراً سأكون جاهز للرحلة", time:"2:30 AM", avatar:"https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=100&q=80" },
-  { id:2, name:"فهد الشهري",   message:"شكراً سأكون جاهز للرحلة", time:"2:30 AM", avatar:"https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=100&q=80" },
-  { id:3, name:"سعود الغامدي", message:"شكراً سأكون جاهز للرحلة", time:"2:30 AM", avatar:"https://images.unsplash.com/photo-1500648767791-00dcc994a43e?auto=format&fit=crop&w=100&q=80" },
-];
-const chatMessages = [
-  { id:1, sender:"user", text:"السلام عليكم، أنا مهتم بالرحلة رقم 35", time:"2:30 AM" },
-  { id:2, sender:"me",   text:"وعليكم السلام، هل ترغب في تأكيد الاستلام؟",  time:"2:30 AM" },
-  { id:3, sender:"user", text:"نعم، أحتاج تفاصيل أكثر عن وقت الرحلة",     time:"2:30 AM" },
-];
-
 // ── Main Component ────────────────────────────────────────────
 export default function SupportPage() {
   const [activeTab, setActiveTab]   = useState("tickets");
   const [tickets, setTickets]       = useState([]);
   const [drivers, setDrivers]       = useState([]);
   const [loading, setLoading]       = useState(true);
-  const [selectedChat, setSelectedChat] = useState(1);
+  const [chats, setChats]           = useState([]);
+  const [chatsLoading, setChatsLoading] = useState(false);
+  const [selectedTripId, setSelectedTripId] = useState(null);
+  const [messages, setMessages]     = useState([]);
+  const [messagesLoading, setMessagesLoading] = useState(false);
   const [msgText, setMsgText]       = useState("");
+  const [sending, setSending]       = useState(false);
+  const messagesEndRef = useRef(null);
 
   // modals
   const [noteModal, setNoteModal]         = useState({ open:false, ticketId:null });
@@ -300,9 +304,30 @@ export default function SupportPage() {
   const [deleteLoading, setDeleteLoading] = useState(false);
   const { searchQuery, setSearchQuery } = useGlobalSearch();
   const { can } = usePermissions();
+  const { user } = useAuth();
+  const toast = useToast();
   const canReply = can(PERMISSIONS.SUPPORT_TICKETS_REPLY);
   const canDelete = can(PERMISSIONS.SUPPORT_TICKETS_DELETE);
   const canEscalate = can(PERMISSIONS.SUPPORT_TICKETS_ESCALATE);
+  const myId = user?.uid ?? "";
+
+  const driverMap = useMemo(() => {
+    const map = new Map();
+    drivers.forEach((d) => map.set(String(d.id), d));
+    return map;
+  }, [drivers]);
+
+  const selectedChat = useMemo(
+    () => chats.find((c) => String(c.tripId) === String(selectedTripId)) ?? null,
+    [chats, selectedTripId],
+  );
+
+  const selectedDriverId = useMemo(
+    () => resolveDriverIdFromChat(selectedChat, drivers, myId),
+    [selectedChat, drivers, myId],
+  );
+
+  const selectedDriver = driverMap.get(String(selectedDriverId));
 
   const filteredTickets = useMemo(
     () => filterByGlobalSearch(tickets, searchQuery, (t) => [
@@ -318,9 +343,51 @@ export default function SupportPage() {
   );
 
   const filteredChats = useMemo(
-    () => filterByGlobalSearch(driversChats, searchQuery, (c) => [c.name, c.message]),
-    [searchQuery]
+    () => filterByGlobalSearch(chats, searchQuery, (c) => {
+      const driverId = resolveDriverIdFromChat(c, drivers, myId);
+      const driver = driverMap.get(String(driverId));
+      return [
+        c.tripId,
+        c.lastMessage,
+        driverDisplayName(driver, driverId),
+        c.time,
+      ];
+    }),
+    [chats, searchQuery, drivers, myId, driverMap]
   );
+
+  const loadChats = useCallback(async () => {
+    setChatsLoading(true);
+    try {
+      const list = await fetchTripChatsList();
+      setChats(list);
+      setSelectedTripId((prev) => {
+        if (prev && list.some((c) => String(c.tripId) === String(prev))) return prev;
+        return list[0]?.tripId ?? null;
+      });
+    } catch (err) {
+      toast.error(err.message || "فشل تحميل المحادثات");
+    } finally {
+      setChatsLoading(false);
+    }
+  }, [toast]);
+
+  const loadMessages = useCallback(async (tripId) => {
+    if (!tripId) {
+      setMessages([]);
+      return;
+    }
+    setMessagesLoading(true);
+    try {
+      const list = await fetchTripChatMessages(tripId);
+      setMessages(list);
+    } catch (err) {
+      toast.error(err.message || "فشل تحميل المحادثة");
+      setMessages([]);
+    } finally {
+      setMessagesLoading(false);
+    }
+  }, [toast]);
 
   const fetchTickets = () => {
     setLoading(true);
@@ -337,21 +404,85 @@ export default function SupportPage() {
     fetch(`${BASE}/drivers`).then(r=>r.json()).then(d=>setDrivers(Array.isArray(d)?d:[])).catch(()=>{});
   }, []);
 
+  useEffect(() => {
+    fetchTickets();
+    fetch(`${BASE}/drivers`).then(r=>r.json()).then(d=>setDrivers(Array.isArray(d)?d:[])).catch(()=>{});
+  }, []);
+
+  useEffect(() => {
+    if (activeTab !== "live") return;
+    loadChats();
+  }, [activeTab, loadChats]);
+
+  useEffect(() => {
+    if (activeTab !== "live" || !selectedTripId) return;
+    loadMessages(selectedTripId);
+  }, [activeTab, selectedTripId, loadMessages]);
+
+  useEffect(() => {
+    if (activeTab !== "live" || !selectedTripId) return undefined;
+    const timer = setInterval(() => {
+      fetchTripChatMessages(selectedTripId)
+        .then(setMessages)
+        .catch(() => {});
+    }, 8000);
+    return () => clearInterval(timer);
+  }, [activeTab, selectedTripId]);
+
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages, selectedTripId]);
+
+  const handleSendMessage = async () => {
+    if (!msgText.trim() || !selectedTripId || !myId) {
+      if (!myId) toast.error("يجب تسجيل الدخول لإرسال رسالة");
+      return;
+    }
+    const receiverId = resolveDriverIdFromChat(selectedChat, drivers, myId);
+    if (!receiverId) {
+      toast.error("تعذر تحديد السائق لهذه المحادثة");
+      return;
+    }
+
+    setSending(true);
+    try {
+      await sendTripChatMessage({
+        tripId: selectedTripId,
+        senderId: myId,
+        receiverId,
+        message: msgText.trim(),
+      });
+      setMsgText("");
+      const list = await fetchTripChatMessages(selectedTripId);
+      setMessages(list);
+      loadChats();
+    } catch (err) {
+      toast.error(err.message || "فشل إرسال الرسالة");
+    } finally {
+      setSending(false);
+    }
+  };
+
   const handleDelete = async () => {
     setDeleteLoading(true);
     const ticketId = deleteModal.ticketId;
     try {
-      // DELETE endpoint not implemented on backend — use PUT status=closed as workaround
-      await fetch(`${BASE}/tickets/${ticketId}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json", Accept: "application/json" },
-        body: JSON.stringify({ status: "closed" }),
+      const res = await fetch(`${BASE}/tickets/${ticketId}`, {
+        method: "DELETE",
+        headers: { Accept: "application/json" },
       });
-    } catch(_) {}
-    setTickets(prev => prev.filter(t => t.id !== ticketId));
-    setDeleteLoading(false);
-    setDeleteModal({ open: false, ticketId: null });
-    setTimeout(() => fetchTickets(), 100);
+      if (!res.ok) {
+        const json = await res.json().catch(() => ({}));
+        throw new Error(json?.message || `فشل حذف التذكرة (${res.status})`);
+      }
+      setTickets((prev) => prev.filter((t) => t.id !== ticketId));
+      toast.success("تم حذف التذكرة");
+    } catch (err) {
+      toast.error(err.message || "فشل حذف التذكرة");
+    } finally {
+      setDeleteLoading(false);
+      setDeleteModal({ open: false, ticketId: null });
+    }
   };
 
   return (
@@ -473,55 +604,108 @@ export default function SupportPage() {
               </div>
             </div>
             <div className="flex-1 overflow-y-auto divide-y divide-gray-50">
-              {filteredChats.map(chat => {
-                const isSel = selectedChat === chat.id;
+              {chatsLoading ? (
+                <Spinner />
+              ) : filteredChats.length === 0 ? (
+                <p className="text-center text-gray-400 text-sm py-10">لا توجد محادثات</p>
+              ) : filteredChats.map((chat) => {
+                const isSel = String(selectedTripId) === String(chat.tripId);
+                const driverId = resolveDriverIdFromChat(chat, drivers, myId);
+                const driver = driverMap.get(String(driverId));
+                const name = driverDisplayName(driver, driverId);
+                const initial = (driver?.name?.[0] ?? "س").toUpperCase();
                 return (
-                  <div key={chat.id} onClick={()=>setSelectedChat(chat.id)} className={`flex items-center justify-between p-4 cursor-pointer transition-all ${isSel ? "bg-[#fcfaf7] border-r-4 border-[#b58f37]" : "hover:bg-gray-50"}`}>
-                    <span className="text-[10px] text-gray-400 self-start shrink-0 pt-0.5">{chat.time}</span>
+                  <div
+                    key={chat.tripId}
+                    onClick={() => setSelectedTripId(chat.tripId)}
+                    className={`flex items-center justify-between p-4 cursor-pointer transition-all ${isSel ? "bg-[#fcfaf7] border-r-4 border-[#b58f37]" : "hover:bg-gray-50"}`}
+                  >
+                    <span className="text-[10px] text-gray-400 self-start shrink-0 pt-0.5">
+                      {chat.time || formatChatTime(chat.createdAt)}
+                    </span>
                     <div className="flex-1 text-right px-3 overflow-hidden">
-                      <h5 className="text-xs font-bold text-gray-800 mb-1">{chat.name}</h5>
-                      <p className={`text-[11px] truncate ${isSel?"text-gray-500":"text-gray-400"}`}>{chat.message}</p>
+                      <h5 className="text-xs font-bold text-gray-800 mb-0.5">{name}</h5>
+                      <p className="text-[10px] text-[#b58f37] mb-1">رحلة #{chat.tripId}</p>
+                      <p className={`text-[11px] truncate ${isSel ? "text-gray-500" : "text-gray-400"}`}>
+                        {chat.lastMessage || "—"}
+                      </p>
                     </div>
-                    <img src={chat.avatar} alt={chat.name} className="w-9 h-9 rounded-full object-cover shrink-0 border border-gray-100"/>
+                    <div className="w-9 h-9 rounded-full bg-gradient-to-br from-[#9C6402] to-[#E6C76A] text-white flex items-center justify-center text-xs font-bold shrink-0 border border-gray-100">
+                      {initial}
+                    </div>
                   </div>
                 );
               })}
             </div>
           </section>
+
           {/* Left: chat window */}
           <section className="flex-1 flex flex-col bg-white">
-            <header className="p-4 border-b border-gray-100 flex items-center gap-3 bg-white">
-              <img src={driversChats[selectedChat-1]?.avatar} alt="" className="w-10 h-10 rounded-full object-cover border border-gray-200"/>
-              <div className="text-right"><h4 className="text-sm font-bold text-gray-800">{driversChats[selectedChat-1]?.name}</h4></div>
-            </header>
-            <div className="flex-1 p-6 overflow-y-auto bg-gray-50/30 space-y-4 flex flex-col">
-              {chatMessages.map(msg => {
-                const isMe = msg.sender === "me";
-                return (
-                  <div key={msg.id} className={`flex flex-col max-w-[70%] ${isMe?"self-end items-end":"self-start items-start"}`}>
-                    <div className={`p-4 rounded-[22px] text-xs leading-relaxed shadow-sm ${isMe?"bg-[#575351] text-white rounded-bl-none text-right":"bg-[#f4f3f1] text-gray-700 rounded-br-none text-right"}`}>
-                      <p className="font-medium">{msg.text}</p>
-                      <div className={`text-[9px] mt-2 flex items-center gap-0.5 ${isMe?"text-gray-300 justify-end":"text-gray-400 justify-start"}`}>
-                        <span>{msg.time}</span>{isMe&&<span className="text-emerald-400">✓✓</span>}
-                      </div>
-                    </div>
+            {selectedTripId ? (
+              <>
+                <header className="p-4 border-b border-gray-100 flex items-center gap-3 bg-white">
+                  <div className="w-10 h-10 rounded-full bg-gradient-to-br from-[#9C6402] to-[#E6C76A] text-white flex items-center justify-center text-sm font-bold border border-gray-200">
+                    {(selectedDriver?.name?.[0] ?? "س").toUpperCase()}
                   </div>
-                );
-              })}
-            </div>
-            <footer className="p-4 bg-white border-t border-gray-100">
-              <div className="flex items-center gap-3 bg-white border border-gray-200 rounded-xl px-4 py-2">
-                <button className="bg-[#b58f37] text-white p-2.5 rounded-lg hover:bg-[#9a762b] transition-all shrink-0 shadow-sm">
-                  <svg className="w-4 h-4 transform rotate-180" fill="currentColor" viewBox="0 0 20 20"><path d="M10.894 2.553a1 1 0 00-1.788 0l-7 14a1 1 0 001.169 1.409l5-1.429A1 1 0 009 15.571V11a1 1 0 112 0v4.571a1 1 0 00.725.962l5 1.428a1 1 0 001.17-1.408l-7-14z"/></svg>
-                </button>
-                <input type="text" value={msgText} onChange={e=>setMsgText(e.target.value)} placeholder="اكتب رسالتك......" className="flex-1 bg-transparent border-none text-xs text-gray-700 focus:outline-none text-right"/>
-                <div className="flex items-center gap-3 text-gray-400 shrink-0 border-r border-gray-200 pr-3">
-                  <button className="hover:text-gray-600 text-sm">🖼️</button>
-                  <button className="hover:text-gray-600 text-sm">📎</button>
-                  <button className="hover:text-gray-600 text-sm">🎙️</button>
+                  <div className="text-right">
+                    <h4 className="text-sm font-bold text-gray-800">
+                      {driverDisplayName(selectedDriver, selectedDriverId)}
+                    </h4>
+                    <p className="text-[11px] text-gray-400">رحلة #{selectedTripId}</p>
+                  </div>
+                </header>
+
+                <div className="flex-1 p-6 overflow-y-auto bg-gray-50/30 space-y-4 flex flex-col">
+                  {messagesLoading ? (
+                    <Spinner />
+                  ) : messages.length === 0 ? (
+                    <p className="text-center text-gray-400 text-sm py-10">لا توجد رسائل — ابدأ المحادثة</p>
+                  ) : (
+                    messages.map((msg) => {
+                      const isMe = String(msg.sender_id) === String(myId);
+                      return (
+                        <div key={msg.id} className={`flex flex-col max-w-[70%] ${isMe ? "self-end items-end" : "self-start items-start"}`}>
+                          <div className={`p-4 rounded-[22px] text-xs leading-relaxed shadow-sm ${isMe ? "bg-[#575351] text-white rounded-bl-none text-right" : "bg-[#f4f3f1] text-gray-700 rounded-br-none text-right"}`}>
+                            <p className="font-medium whitespace-pre-wrap break-words">{msg.message}</p>
+                            <div className={`text-[9px] mt-2 flex items-center gap-0.5 ${isMe ? "text-gray-300 justify-end" : "text-gray-400 justify-start"}`}>
+                              <span>{formatChatTime(msg.created_at)}</span>
+                              {isMe && <span className="text-emerald-400">✓✓</span>}
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })
+                  )}
+                  <div ref={messagesEndRef} />
                 </div>
+
+                <footer className="p-4 bg-white border-t border-gray-100">
+                  <div className="flex items-center gap-3 bg-white border border-gray-200 rounded-xl px-4 py-2">
+                    <button
+                      type="button"
+                      onClick={handleSendMessage}
+                      disabled={sending || !msgText.trim()}
+                      className="bg-[#b58f37] text-white p-2.5 rounded-lg hover:bg-[#9a762b] transition-all shrink-0 shadow-sm disabled:opacity-50"
+                    >
+                      <svg className="w-4 h-4 transform rotate-180" fill="currentColor" viewBox="0 0 20 20"><path d="M10.894 2.553a1 1 0 00-1.788 0l-7 14a1 1 0 001.169 1.409l5-1.429A1 1 0 009 15.571V11a1 1 0 112 0v4.571a1 1 0 00.725.962l5 1.428a1 1 0 001.17-1.408l-7-14z"/></svg>
+                    </button>
+                    <input
+                      type="text"
+                      value={msgText}
+                      onChange={(e) => setMsgText(e.target.value)}
+                      onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && handleSendMessage()}
+                      placeholder="اكتب رسالتك......"
+                      disabled={sending}
+                      className="flex-1 bg-transparent border-none text-xs text-gray-700 focus:outline-none text-right disabled:opacity-50"
+                    />
+                  </div>
+                </footer>
+              </>
+            ) : (
+              <div className="flex-1 flex items-center justify-center text-sm text-gray-400">
+                اختر محادثة من القائمة
               </div>
-            </footer>
+            )}
           </section>
         </div>
       )}

@@ -5,6 +5,7 @@ import { usePermissions } from "../hooks/usePermissions.js";
 import { PERMISSIONS } from "../lib/permissions.js";
 import { useGlobalSearch } from "../hooks/useGlobalSearch";
 import SalesUserForm from "./users/SalesUserForm.jsx";
+import UserDetailsModal from "./users/UserDetailsModal.jsx";
 import UserTable from "./users/UserTable.jsx";
 import AppModal from "./ui/AppModal";
 import {
@@ -18,7 +19,6 @@ import {
   findSalesByEmail,
   normalizeEmail,
 } from "../services/salesService.js";
-import { fetchStaffRolesMap } from "../services/staffRoleService.js";
 import { fetchRoles } from "../services/roleService.js";
 import { buildRoleOptions, getRoleLabel, getDefaultRoleId, resolveApiRoleId } from "../lib/roleUtils.js";
 import { validateUserPhone } from "../lib/phoneValidation.js";
@@ -69,7 +69,6 @@ function UsersPageContent() {
   const canEdit = can(PERMISSIONS.USERS_EDIT);
 
   const [salesUsers, setSalesUsers] = useState([]);
-  const [roleMap, setRoleMap] = useState({});
   const [apiRoles, setApiRoles] = useState([]);
   const [rolesLoading, setRolesLoading] = useState(true);
   const [loading, setLoading] = useState(true);
@@ -82,18 +81,15 @@ function UsersPageContent() {
 
   const [showCreate, setShowCreate] = useState(false);
   const [editUser, setEditUser] = useState(null);
+  const [viewUserId, setViewUserId] = useState(null);
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [deletingId, setDeletingId] = useState(null);
 
   const loadSalesUsers = useCallback(async () => {
     setLoading(true);
     try {
-      const [list, roles] = await Promise.all([
-        fetchSalesList(),
-        fetchStaffRolesMap().catch(() => ({})),
-      ]);
+      const list = await fetchSalesList();
       setSalesUsers(list);
-      setRoleMap(roles);
     } catch (err) {
       toast.error(err.message || "فشل تحميل المستخدمين");
       setSalesUsers([]);
@@ -116,10 +112,10 @@ function UsersPageContent() {
   const users = useMemo(
     () =>
       filterSalesUsers(
-        salesUsers.map((sale) => salesRecordToUser(sale, roleMap[String(sale.id)])),
+        salesUsers.map((sale) => salesRecordToUser(sale)),
         { search: searchQuery, role: filterRole, status: filterStatus }
       ),
-    [salesUsers, roleMap, searchQuery, filterRole, filterStatus]
+    [salesUsers, searchQuery, filterRole, filterStatus]
   );
 
   const currentUserName = currentUser?.fullName ?? currentUser?.displayName ?? "مجهول";
@@ -232,6 +228,12 @@ function UsersPageContent() {
     }
   };
 
+  const handleViewFromDetails = (sale) => {
+    const user = salesRecordToUser(sale);
+    setViewUserId(null);
+    setEditUser(user);
+  };
+
   return (
     <div className="w-full space-y-4" dir="rtl">
       <div className="bg-white rounded-2xl shadow-sm p-4 text-right">
@@ -327,7 +329,8 @@ function UsersPageContent() {
           users={paged}
           loading={loading}
           apiOnly
-          firebaseRoles={apiRoles}
+          roles={roleOptions}
+          onView={(user) => setViewUserId(user.uid ?? user.id)}
           onEdit={setEditUser}
           onDelete={setDeleteTarget}
           canEdit={canEdit}
@@ -370,6 +373,14 @@ function UsersPageContent() {
           </div>
         )}
       </div>
+
+      <UserDetailsModal
+        isOpen={!!viewUserId}
+        onClose={() => setViewUserId(null)}
+        userId={viewUserId}
+        roles={roleOptions}
+        onEdit={canEdit ? handleViewFromDetails : undefined}
+      />
 
       <AppModal
         isOpen={!!deleteTarget}

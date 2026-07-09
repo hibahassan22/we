@@ -4,37 +4,65 @@ import { useToast } from "../../lib/toast.jsx";
 import { usePermissions } from "../../hooks/usePermissions.js";
 import { PERMISSIONS } from "../../lib/permissions.js";
 import { updateRolePermissions, isProtectedRole } from "../../services/roleService.js";
-import PermissionModuleList from "./PermissionModuleList.jsx";
+import { fetchPermissions, fetchRolePermissionLinksByRoleId } from "../../services/permissionService.js";
 import {
-  PERMISSION_MODULES,
-  moduleStateFromPermissions,
-  permissionsFromModuleState,
-  countEnabledInState,
-  totalPermissionCount,
-} from "../../lib/permissionModules.js";
+  groupPermissionsByModule,
+  moduleStateFromPermissionIds,
+  permissionIdsFromModuleState,
+  selectAllModuleState,
+} from "../../lib/apiPermissionBridge.js";
+import PermissionModuleList from "./PermissionModuleList.jsx";
 
 export default function RolePermissionsModal({ isOpen, onClose, role, onSaved }) {
   const toast = useToast();
   const { can } = usePermissions();
   const canEdit = can(PERMISSIONS.PERMISSIONS_EDIT);
-  const [moduleState, setModuleState] = useState(() => moduleStateFromPermissions([]));
+  const [modules, setModules] = useState([]);
+  const [moduleState, setModuleState] = useState({});
+  const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     if (!isOpen || !role) return;
-    setModuleState(moduleStateFromPermissions(role.permissions ?? []));
-  }, [isOpen, role]);
+
+    let cancelled = false;
+    setLoading(true);
+
+    Promise.all([
+      fetchPermissions().catch(() => []),
+      fetchRolePermissionLinksByRoleId(role.id).catch(() => []),
+    ])
+      .then(([allPerms, links]) => {
+        if (cancelled) return;
+        const grouped = groupPermissionsByModule(allPerms);
+        const assigned = new Set(
+          links.map((l) => String(l.permission_id ?? l.permission?.id)).filter(Boolean)
+        );
+        setModules(grouped);
+        setModuleState(moduleStateFromPermissionIds(grouped, assigned));
+      })
+      .catch((err) => {
+        if (!cancelled) toast.error(err.message || "فشل تحميل الصلاحيات");
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, role, toast]);
 
   if (!role) return null;
 
-  const enabledCount = countEnabledInState(moduleState);
-  const total = totalPermissionCount();
+  const enabledCount = Object.values(moduleState).flat().filter(Boolean).length;
+  const total = modules.reduce((n, m) => n + m.permissions.length, 0);
 
   const handleSave = async () => {
     setSaving(true);
     try {
-      const permissions = isProtectedRole(role) ? ["*"] : permissionsFromModuleState(moduleState);
-      await updateRolePermissions(role.id, permissions);
+      const permissionIds = permissionIdsFromModuleState(modules, moduleState);
+      await updateRolePermissions(role.id, permissionIds);
       toast.success(`تم حفظ صلاحيات «${role.name}»`);
       onSaved?.();
       onClose();
@@ -55,14 +83,19 @@ export default function RolePermissionsModal({ isOpen, onClose, role, onSaved })
       isSubmitting={saving}
       footer={
         <div className="flex flex-col-reverse sm:flex-row gap-2 sm:justify-end">
-          <button type="button" onClick={onClose} disabled={saving} className="px-5 py-2.5 border border-gray-200 text-gray-600 text-sm rounded-xl hover:bg-gray-50">
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={saving}
+            className="px-5 py-2.5 border border-gray-200 text-gray-600 text-sm rounded-xl hover:bg-gray-50"
+          >
             {canEdit ? "إلغاء" : "إغلاق"}
           </button>
           {canEdit && (
             <button
               type="button"
               onClick={handleSave}
-              disabled={saving || (!isProtectedRole(role) && enabledCount === 0)}
+              disabled={saving || loading || (!isProtectedRole(role) && enabledCount === 0)}
               className="px-6 py-2.5 bg-[#c9a84c] hover:bg-[#b8973d] disabled:opacity-60 text-white text-sm font-bold rounded-xl"
             >
               {saving ? "جارٍ الحفظ..." : "حفظ الصلاحيات"}
@@ -84,15 +117,43 @@ export default function RolePermissionsModal({ isOpen, onClose, role, onSaved })
           <p className="text-sm text-gray-600 text-right bg-gray-50 border border-gray-100 rounded-xl p-4">
             دور مدير النظام لديه صلاحيات كاملة تلقائياً.
           </p>
-        ) : (
-          <div className="max-h-[60vh] overflow-y-auto">
-            <PermissionModuleList
-              modules={PERMISSION_MODULES}
-              moduleState={moduleState}
-              onChange={setModuleState}
-              readOnly={!canEdit}
-            />
+        ) : loading ? (
+          <div className="flex justify-center py-12">
+            <div className="w-8 h-8 border-4 border-[#c9a84c] border-t-transparent rounded-full animate-spin" />
           </div>
+        ) : modules.length === 0 ? (
+          <p className="text-sm text-gray-500 text-right bg-gray-50 border border-gray-100 rounded-xl p-4">
+            لا توجد صلاحيات في النظام — أضفها من الـ API أولاً.
+          </p>
+        ) : (
+          <>
+            {canEdit && (
+              <div className="flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setModuleState(selectAllModuleState(modules, false))}
+                  className="text-xs px-3 py-1.5 rounded-lg border border-red-200 text-red-500 hover:bg-red-50"
+                >
+                  إلغاء الكل
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setModuleState(selectAllModuleState(modules, true))}
+                  className="text-xs px-3 py-1.5 rounded-lg border border-green-200 text-green-600 hover:bg-green-50"
+                >
+                  تفعيل الكل
+                </button>
+              </div>
+            )}
+            <div className="max-h-[60vh] overflow-y-auto">
+              <PermissionModuleList
+                modules={modules}
+                moduleState={moduleState}
+                onChange={setModuleState}
+                readOnly={!canEdit}
+              />
+            </div>
+          </>
         )}
       </div>
     </AppModal>

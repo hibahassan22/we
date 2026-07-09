@@ -1,6 +1,6 @@
 /**
  * Enterprise permission keys for Drivo Admin Dashboard.
- * Stored in Firestore `permissions` collection and assigned via roles/users.
+ * Assigned via API /api/role-permissions and roles.
  */
 
 export const PERMISSIONS = {

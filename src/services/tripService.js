@@ -38,6 +38,70 @@ export function normalizeWithoutDriverTrip(trip) {
   };
 }
 
+/** استخراج قائمة الركاب من بيانات الرحلة */
+export function extractTripPassengers(trip) {
+  if (!trip) return [];
+
+  const list = [];
+  const seen = new Set();
+
+  const add = (p, isMain = false) => {
+    if (!p || typeof p !== "object") return;
+
+    const passengerId = p.id ?? p.passenger_id ?? null;
+    const customerId = p.customer_id ?? p.customer?.id ?? null;
+    const name = p.full_name ?? p.name ?? p.customer_name;
+    const phone = p.phone ?? p.customer_phone ?? p.customer?.phone;
+
+    if (!name && !phone && passengerId == null && customerId == null) return;
+
+    const key = customerId != null
+      ? `customer:${customerId}`
+      : passengerId != null
+        ? `passenger:${passengerId}`
+        : `name:${name}:${phone}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+
+    list.push({
+      passengerId,
+      customerId,
+      name: name ?? "—",
+      phone: phone ?? "—",
+      nationality: p.nationality,
+      gender: p.gender,
+      isMain: isMain || Boolean(p.is_main ?? p.isMain),
+    });
+  };
+
+  const mainPassenger =
+    trip.main_passenger ??
+    trip["الراكب الاساسى"] ??
+    trip["الراكب الأساسي"];
+
+  if (mainPassenger) add(mainPassenger, true);
+
+  const arrays = [
+    trip.passengers,
+    trip.trip_passengers,
+    trip.customers,
+    trip.passenger_list,
+  ];
+  arrays.forEach((arr) => {
+    if (Array.isArray(arr)) arr.forEach((p) => add(p));
+  });
+
+  if (!list.length && (trip.customer_name || trip.customer_phone || trip.customer_id)) {
+    add({
+      customer_id: trip.customer_id,
+      full_name: trip.customer_name,
+      phone: trip.customer_phone,
+    }, true);
+  }
+
+  return list;
+}
+
 export function normalizeRegularTrip(trip) {
   if (!trip) return trip;
   return { ...trip, _supportsAddPayment: false };
@@ -525,15 +589,48 @@ export async function requestAddPassenger(payload) {
   return parseJsonResponse(res);
 }
 
-/** DELETE /api/trip/passenger/request-delete */
-export async function requestDeletePassenger({ tripId, customerId }) {
+/** POST /api/trip/passenger/request-delete */
+export async function requestDeletePassenger({ tripId, customerId, passengerId }) {
+  const body = { trip_id: Number(tripId) };
+
+  if (customerId != null && customerId !== "") {
+    body.customer_id = Number(customerId);
+  }
+  if (passengerId != null && passengerId !== "") {
+    body.passenger_id = Number(passengerId);
+  }
+
+  if (body.customer_id == null && body.passenger_id == null) {
+    throw new Error("لا يمكن تحديد الراكب المراد حذفه");
+  }
+
   const res = await fetch(`${API_BASE}/trip/passenger/request-delete`, {
-    method: "DELETE",
+    method: "POST",
     headers: { "Content-Type": "application/json", Accept: "application/json" },
-    body: JSON.stringify({
-      trip_id: Number(tripId),
-      customer_id: Number(customerId),
-    }),
+    body: JSON.stringify(body),
+  });
+  return parseJsonResponse(res);
+}
+
+/** GET /api/passenger-requests */
+export async function fetchPassengerRequests(status) {
+  const qs = status ? `?status=${encodeURIComponent(status)}` : "";
+  const res = await fetch(`${API_BASE}/passenger-requests${qs}`, {
+    headers: { Accept: "application/json" },
+  });
+  const json = await parseJsonResponse(res);
+  if (Array.isArray(json)) return json;
+  return json?.data ?? json?.requests ?? [];
+}
+
+/** POST /api/trip/passenger/request-action/{id} — status: approved | rejected */
+export async function passengerRequestAction(requestId, status) {
+  const id = String(requestId ?? "").trim();
+  if (!id) throw new Error("معرّف الطلب غير صالح");
+  const res = await fetch(`${API_BASE}/trip/passenger/request-action/${encodeURIComponent(id)}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify({ status }),
   });
   return parseJsonResponse(res);
 }

@@ -15,7 +15,7 @@ function ModuleExpanded({ module, enabled, onToggle, onToggleAll, readOnly = fal
       )}
       {module.permissions.map((perm, i) => (
         <div
-          key={perm.key}
+          key={perm.id ?? perm.key}
           className={`flex items-center justify-between px-3 py-2.5 rounded-xl border transition-colors ${
             enabled[i] ? "bg-green-50 border-green-100" : "bg-gray-50 border-gray-100"
           }`}

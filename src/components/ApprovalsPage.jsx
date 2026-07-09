@@ -6,6 +6,10 @@ import {
   approvePaymentRequest,
   rejectPaymentRequest,
 } from "../services/paymentRequestService";
+import {
+  fetchPassengerRequests,
+  passengerRequestAction,
+} from "../services/tripService.js";
 import RefundHandleModal from "./approvals/RefundHandleModal";
 
 const BASE = "https://drivo1.elmoroj.com/api";
@@ -48,8 +52,9 @@ const FIELD_LABELS = {
   description: "الوصف",
 };
 
-const statusOptions = ["الكل", "معلق", "موافق", "مرفوض"];
-const typeOptions = ["الكل", "تعديل رحلة", "طلبات الدفعات", "مرتجعات"];
+const typeOptions = ["الكل", "تعديل رحلة", "طلبات الدفعات", "طلبات الركاب", "مرتجعات"];
+
+const isPendingRequest = (req) => req.status === "معلق";
 
 const typeConfig = {
   "تعديل رحلة": {
@@ -61,6 +66,11 @@ const typeConfig = {
     bg: "bg-blue-50",
     icon: "text-blue-500",
     d: "M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z",
+  },
+  "طلبات الركاب": {
+    bg: "bg-teal-50",
+    icon: "text-teal-600",
+    d: "M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z",
   },
   مرتجعات: {
     bg: "bg-orange-50",
@@ -231,6 +241,55 @@ function normalizePaymentRequest(item) {
   };
 }
 
+function normalizePassengerRequest(item) {
+  const statusInfo = normalizeStatus(item.status ?? item.request_status);
+  const created = item.created_at ?? item.date ?? "";
+  const actionRaw = String(item.request_type ?? item.action ?? item.type ?? item.operation ?? "add").toLowerCase();
+  const isDelete = actionRaw.includes("delete") || actionRaw.includes("حذف") || actionRaw === "remove";
+
+  let date = "";
+  let time = "";
+  if (created) {
+    const d = new Date(String(created).replace(" ", "T"));
+    if (!Number.isNaN(d.getTime())) {
+      date = d.toLocaleDateString("ar-EG");
+      time = d.toLocaleTimeString("ar-EG", { hour: "2-digit", minute: "2-digit" });
+    } else {
+      date = String(created);
+    }
+  }
+
+  const operationDays = Array.isArray(item.operation_days)
+    ? item.operation_days.join("، ")
+    : (item.operation_days ?? "");
+
+  return {
+    id: item.id ?? item.request_id,
+    type: "طلبات الركاب",
+    status: statusInfo.label,
+    statusColor: statusInfo.color,
+    tripId: item.trip_id ?? item.trip?.id,
+    customerId: item.customer_id ?? item.customer?.id,
+    passengerName: item.full_name ?? item.customer_name ?? item.customer?.name ?? "—",
+    passengerPhone: item.phone ?? item.customer_phone ?? item.customer?.phone ?? "",
+    requestKind: isDelete ? "حذف راكب" : "إضافة راكب",
+    nationality: item.nationality,
+    gender: item.gender,
+    operationDays,
+    departureTime: item.departure_time,
+    returnTime: item.return_time,
+    startLat: item.start_lat,
+    startLng: item.start_lng,
+    endLat: item.end_lat,
+    endLng: item.end_lng,
+    notes: item.notes ?? "",
+    submittedBy: item.submitted_by ?? item.requested_by ?? item.user_name ?? "—",
+    date,
+    time,
+    raw: item,
+  };
+}
+
 function parseList(data) {
   if (Array.isArray(data)) return data;
   if (Array.isArray(data?.data)) return data.data;
@@ -242,10 +301,10 @@ function parseList(data) {
 export default function ApprovalsPage() {
   const [requests, setRequests] = useState([]);
   const [paymentRequests, setPaymentRequests] = useState([]);
+  const [passengerRequests, setPassengerRequests] = useState([]);
   const [refunds, setRefunds] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [statusFilter, setStatusFilter] = useState("الكل");
   const [typeFilter, setTypeFilter] = useState("الكل");
   const { searchQuery, setSearchQuery } = useGlobalSearch();
   const [actionLoading, setActionLoading] = useState(null);
@@ -255,12 +314,16 @@ export default function ApprovalsPage() {
     setLoading(true);
     setError("");
     try {
-      const [editRes, paymentsData, refundsData] = await Promise.all([
+      const [editRes, paymentsData, passengerData, refundsData] = await Promise.all([
         fetch(`${BASE}/trip-edit-requeststest`, { headers: { Accept: "application/json" } })
           .then(async (r) => (r.ok ? r.json() : null))
           .catch(() => null),
-        fetchPaymentRequests().catch((e) => {
+        fetchPaymentRequests({ status: "pending" }).catch((e) => {
           console.warn("fetchPaymentRequests:", e);
+          return [];
+        }),
+        fetchPassengerRequests("pending").catch((e) => {
+          console.warn("fetchPassengerRequests:", e);
           return [];
         }),
         fetchAllRefunds().catch((e) => {
@@ -268,10 +331,11 @@ export default function ApprovalsPage() {
           return [];
         }),
       ]);
-      setRequests(editRes ? parseList(editRes).map(normalizeRequest) : []);
-      setPaymentRequests(paymentsData.map(normalizePaymentRequest));
-      setRefunds(refundsData.map(normalizeRefund));
-      if (!editRes && !paymentsData.length && !refundsData.length) {
+      setRequests(editRes ? parseList(editRes).map(normalizeRequest).filter(isPendingRequest) : []);
+      setPaymentRequests(paymentsData.map(normalizePaymentRequest).filter(isPendingRequest));
+      setPassengerRequests(passengerData.map(normalizePassengerRequest).filter(isPendingRequest));
+      setRefunds(refundsData.map(normalizeRefund).filter(isPendingRequest));
+      if (!editRes && !paymentsData.length && !passengerData.length && !refundsData.length) {
         setError("تعذر تحميل الطلبات. يرجى التحقق من اتصال الشبكة.");
       }
     } catch (err) {
@@ -350,11 +414,38 @@ export default function ApprovalsPage() {
     }
   };
 
-  const allItems = [...requests, ...paymentRequests, ...refunds];
+  const handleApprovePassenger = async (id) => {
+    const key = `passenger-${id}`;
+    setActionLoading(key);
+    try {
+      await passengerRequestAction(id, "approved");
+      fetchAll();
+    } catch (err) {
+      console.error("handleApprovePassenger error:", err);
+      alert(err.message || "حدث خطأ أثناء الموافقة على طلب الراكب");
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const handleRejectPassenger = async (id) => {
+    const key = `passenger-${id}`;
+    setActionLoading(key);
+    try {
+      await passengerRequestAction(id, "rejected");
+      fetchAll();
+    } catch (err) {
+      console.error("handleRejectPassenger error:", err);
+      alert(err.message || "حدث خطأ أثناء رفض طلب الراكب");
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const allItems = [...requests, ...paymentRequests, ...passengerRequests, ...refunds];
 
   const filtered = allItems.filter((r) => {
     const matchType = typeFilter === "الكل" || r.type === typeFilter;
-    const matchStatus = statusFilter === "الكل" || r.status === statusFilter;
     const q = searchQuery.trim();
     const matchSearch =
       q === "" ||
@@ -363,8 +454,10 @@ export default function ApprovalsPage() {
       String(r.paidAmount ?? "").includes(q) ||
       String(r.notes ?? "").includes(q) ||
       String(r.id).includes(q) ||
-      String(r.tripId ?? "").includes(q);
-    return matchType && matchStatus && matchSearch;
+      String(r.tripId ?? "").includes(q) ||
+      String(r.passengerName ?? "").includes(q) ||
+      String(r.requestKind ?? "").includes(q);
+    return matchType && matchSearch;
   });
 
   const renderEditRequest = (req) => {
@@ -439,12 +532,6 @@ export default function ApprovalsPage() {
             >
               {actionLoading === req.id ? "جارٍ الموافقة..." : "الموافقة على الطلب"}
             </button>
-          </div>
-        )}
-
-        {req.status !== "معلق" && (
-          <div className={`text-center text-xs font-medium py-2 rounded-xl ${req.status === "موافق" ? "bg-green-50 text-green-600" : "bg-red-50 text-red-500"}`}>
-            {req.status === "موافق" ? "✓ تمت الموافقة على هذا الطلب" : "✕ تم رفض هذا الطلب"}
           </div>
         )}
       </div>
@@ -546,10 +633,96 @@ export default function ApprovalsPage() {
             </button>
           </div>
         )}
+      </div>
+    );
+  };
 
-        {req.status !== "معلق" && (
-          <div className={`text-center text-xs font-medium py-2 rounded-xl ${req.status === "موافق" ? "bg-green-50 text-green-600" : "bg-red-50 text-red-500"}`}>
-            {req.status === "موافق" ? "✓ تمت الموافقة على طلب الدفعة" : "✕ تم رفض طلب الدفعة"}
+  const renderPassengerRequest = (req) => {
+    const config = typeConfig["طلبات الركاب"];
+    const actionKey = `passenger-${req.id}`;
+    const coords =
+      req.startLat != null && req.startLng != null
+        ? `${req.startLat}, ${req.startLng}`
+        : null;
+    const endCoords =
+      req.endLat != null && req.endLng != null
+        ? `${req.endLat}, ${req.endLng}`
+        : null;
+
+    return (
+      <div key={`passenger-${req.id}`} className="border border-gray-100 rounded-xl p-4 space-y-3 hover:bg-gray-50/40 transition-colors">
+        <div className="flex items-center justify-end gap-2">
+          <span className="text-xs text-gray-400 font-mono">{req.id}#</span>
+          <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${req.statusColor}`}>{req.status}</span>
+          <span className="text-sm font-semibold text-gray-700">{req.requestKind}</span>
+          <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 ${config.bg}`}>
+            <svg className={`w-4 h-4 ${config.icon}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d={config.d} />
+            </svg>
+          </div>
+        </div>
+
+        <div className="text-right">
+          <p className="text-sm font-bold text-gray-800">
+            رحلة #{req.tripId} — {req.passengerName}
+          </p>
+          <div className="flex items-center justify-end gap-2 mt-1 text-xs text-gray-400 flex-wrap">
+            {req.passengerPhone && <span dir="ltr">{req.passengerPhone}</span>}
+            {(req.date || req.time) && (
+              <>
+                {req.passengerPhone && <span className="text-gray-300">•</span>}
+                <span>{req.date}{req.time && ` • ${req.time}`}</span>
+              </>
+            )}
+          </div>
+        </div>
+
+        <div className="bg-gray-50 rounded-xl p-3 space-y-1.5 text-xs text-right">
+          {req.nationality && (
+            <div className="flex justify-between gap-2"><span className="text-gray-800">{req.nationality}</span><span className="text-gray-500">الجنسية</span></div>
+          )}
+          {req.gender && (
+            <div className="flex justify-between gap-2"><span className="text-gray-800">{req.gender}</span><span className="text-gray-500">الجنس</span></div>
+          )}
+          {req.operationDays && (
+            <div className="flex justify-between gap-2"><span className="text-gray-800">{req.operationDays}</span><span className="text-gray-500">أيام التشغيل</span></div>
+          )}
+          {(req.departureTime || req.returnTime) && (
+            <div className="flex justify-between gap-2">
+              <span className="text-gray-800" dir="ltr">{req.departureTime ?? "—"} → {req.returnTime ?? "—"}</span>
+              <span className="text-gray-500">الأوقات</span>
+            </div>
+          )}
+          {coords && (
+            <div className="flex justify-between gap-2"><span className="text-gray-800" dir="ltr">{coords}</span><span className="text-gray-500">انطلاق</span></div>
+          )}
+          {endCoords && (
+            <div className="flex justify-between gap-2"><span className="text-gray-800" dir="ltr">{endCoords}</span><span className="text-gray-500">وصول</span></div>
+          )}
+          {req.notes && (
+            <div className="pt-2 border-t border-gray-200">
+              <p className="text-gray-500 mb-1">ملاحظات</p>
+              <p className="text-gray-700 leading-relaxed">{req.notes}</p>
+            </div>
+          )}
+        </div>
+
+        {req.status === "معلق" && (
+          <div className="grid grid-cols-2 gap-3 pt-1">
+            <button
+              disabled={actionLoading === actionKey}
+              onClick={() => handleRejectPassenger(req.id)}
+              className="py-2.5 rounded-xl border border-red-200 text-red-500 text-sm font-medium hover:bg-red-50 transition-colors disabled:opacity-50"
+            >
+              {actionLoading === actionKey ? "..." : "رفض"}
+            </button>
+            <button
+              disabled={actionLoading === actionKey}
+              onClick={() => handleApprovePassenger(req.id)}
+              className="py-2.5 rounded-xl bg-green-500 hover:bg-green-600 text-white text-sm font-medium transition-colors disabled:opacity-50"
+            >
+              {actionLoading === actionKey ? "..." : "موافقة"}
+            </button>
           </div>
         )}
       </div>
@@ -615,12 +788,6 @@ export default function ApprovalsPage() {
             معالجة طلب الاسترداد
           </button>
         )}
-
-        {req.status !== "معلق" && (
-          <div className={`text-center text-xs font-medium py-2 rounded-xl ${req.status === "موافق" ? "bg-green-50 text-green-600" : "bg-red-50 text-red-500"}`}>
-            {req.status === "موافق" ? "✓ تم قبول طلب الاسترداد" : "✕ تم رفض طلب الاسترداد"}
-          </div>
-        )}
       </div>
     );
   };
@@ -631,13 +798,13 @@ export default function ApprovalsPage() {
       <div className="bg-white rounded-2xl shadow-sm px-5 py-4">
         <h1 className="text-2xl font-semibold text-[#c9a84c] text-right">مركز الموافقات</h1>
         <p className="text-xs text-gray-400 mt-0.5 text-right">
-          مراجعة وموافقة على طلبات تعديل الرحلات وطلبات الدفعات وطلبات الاسترداد
+          الطلبات المعلقة فقط — تختفي تلقائياً بعد الموافقة أو الرفض
         </p>
       </div>
 
       <div className="bg-white rounded-2xl shadow-sm p-5 space-y-4">
 
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div className="flex flex-col gap-1">
             <label className="text-xs text-gray-500 text-right">نوع الطلب</label>
             <select
@@ -646,18 +813,6 @@ export default function ApprovalsPage() {
               className="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400 text-gray-600 text-right"
             >
               {typeOptions.map((s) => (
-                <option key={s}>{s}</option>
-              ))}
-            </select>
-          </div>
-          <div className="flex flex-col gap-1">
-            <label className="text-xs text-gray-500 text-right">فلتر حسب الحالة</label>
-            <select
-              value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value)}
-              className="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400 text-gray-600 text-right"
-            >
-              {statusOptions.map((s) => (
                 <option key={s}>{s}</option>
               ))}
             </select>
@@ -695,6 +850,7 @@ export default function ApprovalsPage() {
             {filtered.map((req) => {
               if (req.type === "مرتجعات") return renderRefund(req);
               if (req.type === "طلبات الدفعات") return renderPaymentRequest(req);
+              if (req.type === "طلبات الركاب") return renderPassengerRequest(req);
               return renderEditRequest(req);
             })}
 

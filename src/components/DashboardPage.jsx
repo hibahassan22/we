@@ -12,6 +12,9 @@ import {
   tripListLabel,
   ARABIC_MONTHS,
 } from "../lib/tripChartUtils.js";
+import { fetchAllTripsForList, fetchOfferedTripsList } from "../services/tripService.js";
+
+const API_BASE = "/api";
 
 // =================================================================
 // 1. Helper Components & Functions
@@ -240,17 +243,39 @@ const DonutChart = ({ segments, loading }) => {
 
 
 const STATUS_COLORS = {
-  'completed': "#22c55e", // green
-  'progress': "#3b82f6",  // blue
-  'pending': "#f97316",   // orange
-  'cancelled': "#ef4444", // red
-  'failed': "#6b7280",    // gray
-  'مكتملة': "#22c55e",
-  'قيد التنفيذ': "#3b82f6",
-  'معلقة': '#f97316',
-  'ملغية': '#ef4444',
-  'مرفوضة': '#6b7280'
+  completed: "#22c55e",
+  progress: "#3b82f6",
+  in_progress: "#3b82f6",
+  cancelled: "#ef4444",
+  failed: "#6b7280",
+  تم: "#22c55e",
+  مكتملة: "#22c55e",
+  "قيد التنفيذ": "#3b82f6",
+  معلقة: "#f97316",
+  المعروضة: "#c9a84c",
+  ملغية: "#ef4444",
+  مرفوضة: "#6b7280",
+  "غير محدد": "#888888",
 };
+
+function normalizeChartStatus(raw) {
+  const status = String(raw ?? "").trim();
+  if (!status) return "غير محدد";
+  const lower = status.toLowerCase();
+
+  if (lower === "pending" || status === "معلقة" || lower === "suspended" || status === "موقوفة") {
+    return "معلقة";
+  }
+  if (lower === "offered" || status === "معروضة") {
+    return "المعروضة";
+  }
+
+  return status;
+}
+
+function chartStatusColor(label) {
+  return STATUS_COLORS[label] ?? STATUS_COLORS[String(label).toLowerCase()] ?? "#888888";
+}
 
 const ACTIVE_TRIP_STATUSES = new Set([
   "active",
@@ -304,24 +329,18 @@ export default function DashboardPage() {
     setLoading(true);
     setError(null);
     try {
-      const [countsRes, logRes, offeredRes, driversRes] = await Promise.all([
-        fetch("https://drivo1.elmoroj.com/api/dashboard-counts"),
-        fetch("https://drivo1.elmoroj.com/api/trips"),
-        fetch("https://drivo1.elmoroj.com/api/trip-without-drivers"),
-        fetch("https://drivo1.elmoroj.com/api/drivers"),
+      const [countsData, logTrips, offeredTrips, driversData] = await Promise.all([
+        fetch(`${API_BASE}/dashboard-counts`).then((r) => r.json()).catch(() => ({})),
+        fetchAllTripsForList().catch(() => []),
+        fetchOfferedTripsList().catch(() => []),
+        fetch(`${API_BASE}/drivers`).then((r) => r.json()).catch(() => []),
       ]);
 
-      const countsData = await countsRes.json();
-      const logData = await logRes.json();
-      const offeredData = await offeredRes.json();
-      const driversData = await driversRes.json();
-
-      const logTrips = Array.isArray(logData) ? logData : (logData.data ?? logData.value ?? []);
-      const offeredTrips = Array.isArray(offeredData) ? offeredData : (offeredData.data ?? []);
       const driverList = Array.isArray(driversData) ? driversData : (driversData.data ?? driversData.drivers ?? []);
+      const mergedTrips = mergeTripSources(logTrips, offeredTrips);
 
-      setCounts(countsData.data);
-      setTrips(mergeTripSources(logTrips, offeredTrips));
+      setCounts(countsData.data ?? countsData);
+      setTrips(mergedTrips);
       setDrivers(driverList);
     } catch (e) {
       setError(e.message || "فشل تحميل بيانات لوحة التحكم.");
@@ -376,12 +395,12 @@ export default function DashboardPage() {
   const statusChartData = useMemo(() => {
     const statusCounts = {};
     scopedTrips.forEach((trip) => {
-      const status = trip.trip_status || trip.status || "غير محدد";
+      const status = normalizeChartStatus(trip.trip_status || trip.status);
       if (!statusCounts[status]) {
         statusCounts[status] = {
           label: status,
           value: 0,
-          color: STATUS_COLORS[status.toLowerCase()] || STATUS_COLORS[status] || "#888",
+          color: chartStatusColor(status),
         };
       }
       statusCounts[status].value++;
@@ -391,7 +410,7 @@ export default function DashboardPage() {
 
   const handlePrint = () => window.print();
 
-  const totalTrips = counts?.total_trips ?? trips.length;
+  const totalTrips = trips.length;
 
   const activeTripsCount = useMemo(() => countActiveTrips(trips), [trips]);
   const activeDriversCount = useMemo(() => countActiveDrivers(drivers), [drivers]);
@@ -399,7 +418,7 @@ export default function DashboardPage() {
   const stats = [
     {
       label: "إجمالي الرحلات",
-      value: counts?.total_trips ?? trips.length,
+      value: trips.length,
       icon: <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7"/></svg>
     },
     {

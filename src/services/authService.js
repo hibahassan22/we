@@ -1,109 +1,141 @@
-import {
-  signInWithEmailAndPassword,
-  signOut as firebaseSignOut,
-  sendPasswordResetEmail,
-  updatePassword,
-  reauthenticateWithCredential,
-  EmailAuthProvider,
-} from "firebase/auth";
-import { doc, getDoc, updateDoc, serverTimestamp } from "firebase/firestore";
-import { auth } from "../firebase/auth.js";
-import { db } from "../firebase/firestore.js";
-import { getAuthErrorMessage, STATUS_MESSAGES } from "../lib/authErrors.js";
-import { logActivity } from "./activityService.js";
+import { STATUS_MESSAGES } from "../lib/authErrors.js";
 
+const SESSION_KEY = "drivo_session";
+const API_BASE = "/api";
 const ACTIVE_STATUSES = new Set(["active"]);
 
-export async function loginWithEmail(email, password) {
+export function getSession() {
   try {
-    const credential = await signInWithEmailAndPassword(auth, email.trim(), password);
-    await credential.user.getIdToken(true);
-    const profile = await fetchUserProfile(credential.user.uid);
-
-    if (!profile) {
-      await firebaseSignOut(auth);
-      throw {
-        code: "auth/profile-not-found",
-        message: "حسابك غير مكتمل في النظام. تواصل مع مدير النظام لإكمال إعداد الحساب",
-      };
-    }
-
-    if (!ACTIVE_STATUSES.has(profile.status)) {
-      await firebaseSignOut(auth);
-      const msg = STATUS_MESSAGES[profile.status] ?? "حسابك غير مفعّل";
-      throw { code: "auth/user-disabled", message: msg };
-    }
-
-    await updateDoc(doc(db, "users", credential.user.uid), {
-      lastLogin: serverTimestamp(),
-      ...(profile.firstLogin ? { firstLogin: false } : {}),
-    }).catch(() => {});
-
-    await logActivity({
-      action: "login",
-      performedBy: credential.user.uid,
-      targetUser: credential.user.uid,
-    }).catch(() => {});
-
-    return { user: credential.user, profile };
-  } catch (error) {
-    throw new Error(getAuthErrorMessage(error));
+    const raw = localStorage.getItem(SESSION_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
   }
+}
+
+function setSession(sale) {
+  const { password: _pw, ...safe } = sale ?? {};
+  const data = { sale: safe, loggedInAt: new Date().toISOString() };
+  localStorage.setItem(SESSION_KEY, JSON.stringify(data));
+  return data;
+}
+
+export function clearSession() {
+  localStorage.removeItem(SESSION_KEY);
+}
+
+export function getCurrentSale() {
+  return getSession()?.sale ?? null;
+}
+
+export function saleToProfile(sale) {
+  if (!sale) return null;
+  return {
+    uid: sale.id,
+    id: sale.id,
+    fullName: sale.name ?? "",
+    name: sale.name ?? "",
+    email: sale.email ?? "",
+    phone: sale.phone ?? "",
+    role_id: sale.role_id ?? null,
+    role: sale.role_id != null ? String(sale.role_id) : "",
+    status: sale.status ?? "active",
+    permissions: [],
+    target: sale.target,
+    main_target: sale.main_target,
+  };
+}
+
+/** POST /api/sales/login */
+export async function loginWithEmail(email, password) {
+  const res = await fetch(`${API_BASE}/sales/login`, {
+    method: "POST",
+    headers: { Accept: "application/json", "Content-Type": "application/json" },
+    body: JSON.stringify({
+      email: String(email).trim().toLowerCase(),
+      password: String(password),
+    }),
+  });
+
+  const text = await res.text();
+  let data = {};
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch {
+    data = { message: text };
+  }
+
+  if (!res.ok) {
+    throw new Error(data?.message || "البريد الإلكتروني أو كلمة المرور غير صحيحة");
+  }
+
+  const sale = data?.sale ?? data?.data ?? data?.user;
+  if (!sale?.id) {
+    throw new Error(data?.message || "استجابة تسجيل الدخول غير صالحة");
+  }
+
+  const status = sale.status ?? "active";
+  if (!ACTIVE_STATUSES.has(status)) {
+    throw new Error(STATUS_MESSAGES[status] ?? "حسابك غير مفعّل");
+  }
+
+  const session = setSession(sale);
+  return { sale: session.sale, message: data?.message };
 }
 
 export async function logout() {
-  const uid = auth.currentUser?.uid;
-  if (uid) {
-    await logActivity({
-      action: "logout",
-      performedBy: uid,
-      targetUser: uid,
-    }).catch(() => {});
-  }
-  await firebaseSignOut(auth);
+  clearSession();
 }
 
-export async function sendResetEmail(email) {
-  try {
-    await sendPasswordResetEmail(auth, email.trim());
-  } catch (error) {
-    throw new Error(getAuthErrorMessage(error));
-  }
+export async function sendResetEmail() {
+  throw new Error("تواصل مع مدير النظام لإعادة تعيين كلمة المرور");
 }
 
 export async function changePassword(currentPassword, newPassword) {
-  const user = auth.currentUser;
-  if (!user?.email) throw new Error("يجب تسجيل الدخول أولاً");
+  const session = getSession();
+  const sale = session?.sale;
+  if (!sale?.id || !sale?.email) throw new Error("يجب تسجيل الدخول أولاً");
 
-  try {
-    const credential = EmailAuthProvider.credential(user.email, currentPassword);
-    await reauthenticateWithCredential(user, credential);
-    await updatePassword(user, newPassword);
+  const verifyRes = await fetch(`${API_BASE}/sales/login`, {
+    method: "POST",
+    headers: { Accept: "application/json", "Content-Type": "application/json" },
+    body: JSON.stringify({ email: sale.email, password: currentPassword }),
+  });
+  if (!verifyRes.ok) {
+    throw new Error("كلمة المرور الحالية غير صحيحة");
+  }
 
-    await updateDoc(doc(db, "users", user.uid), {
-      firstLogin: false,
-      passwordChangedAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
-    });
+  const res = await fetch(`${API_BASE}/sales/${encodeURIComponent(sale.id)}`, {
+    method: "PUT",
+    headers: { Accept: "application/json", "Content-Type": "application/json" },
+    body: JSON.stringify({ password: newPassword }),
+  });
 
-    await logActivity({
-      action: "password_changed",
-      performedBy: user.uid,
-      targetUser: user.uid,
-    });
-  } catch (error) {
-    throw new Error(getAuthErrorMessage(error));
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(data?.message || "فشل تغيير كلمة المرور");
   }
 }
 
 export async function fetchUserProfile(uid) {
-  const snap = await getDoc(doc(db, "users", uid));
-  if (!snap.exists()) return null;
-  return { uid, ...snap.data() };
+  const session = getSession();
+  if (session?.sale?.id === uid) {
+    return saleToProfile(session.sale);
+  }
+
+  const res = await fetch(`${API_BASE}/sales/${encodeURIComponent(uid)}`, {
+    headers: { Accept: "application/json" },
+  });
+  if (!res.ok) return null;
+
+  const data = await res.json();
+  const sale = data?.sale ?? data?.data ?? data;
+  if (!sale?.id) return null;
+
+  setSession(sale);
+  return saleToProfile(sale);
 }
 
-export async function getIdToken(forceRefresh = false) {
-  const user = auth.currentUser;
-  if (!user) return null;
-  return user.getIdToken(forceRefresh);
+export async function getIdToken() {
+  return getSession()?.token ?? null;
 }

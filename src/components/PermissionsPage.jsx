@@ -89,9 +89,9 @@ export default function PermissionsPage() {
   };
 
   const permCount = (role) => {
-    if (!Array.isArray(role.permissions)) return 0;
-    if (role.permissions.includes("*")) return "الكل";
-    return role.permissions.length;
+    if (isProtectedRole(role)) return "الكل";
+    const count = role.permissionIds?.length ?? role.permissions?.length ?? 0;
+    return count;
   };
 
   return (

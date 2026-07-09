@@ -8,8 +8,15 @@ import { filterByGlobalSearch } from "../lib/searchUtils";
 import AppModal, { ModalField, ModalActions, modalInputClass, ConfirmModal } from "./ui/AppModal";
 import AddClientModal from "./clients/AddClientModal";
 import { bannerImage } from "../lib/images.js";
+import {
+  fetchCustomerDetails,
+  fetchCustomerNotes,
+  updateCustomer,
+  deleteCustomer,
+  formatGenderLabel,
+} from "../services/customerService.js";
 
-const API_BASE = "https://drivo1.elmoroj.com";
+const API_BASE = "/api";
 
 // ======= Star Rating =======
 const StarRating = ({ value }) => (
@@ -22,39 +29,85 @@ const StarRating = ({ value }) => (
 );
 
 // ======= Client Details Modal (عرض التفاصيل) =======
-const ClientDetailsModal = ({ isOpen, onClose, client, onUpdateClient, onAddNote }) => {
+function StaticField({ label, value, dir }) {
+  return (
+    <div className="space-y-1.5 text-right">
+      <p className="text-xs font-medium text-gray-400">{label}</p>
+      <p className="w-full border border-gray-100 bg-gray-50 rounded-xl px-4 py-2.5 text-gray-800 text-sm" dir={dir}>
+        {value ?? "—"}
+      </p>
+    </div>
+  );
+}
+
+const ClientDetailsModal = ({
+  isOpen,
+  onClose,
+  client,
+  loading,
+  initialEditMode = false,
+  onUpdateClient,
+  onAddNote,
+}) => {
   const { can } = usePermissions();
   const canEdit = can(PERMISSIONS.CLIENTS_EDIT);
   const canExport = can(PERMISSIONS.CLIENTS_EXPORT);
-  const [activeTab, setActiveTab] = useState("basic"); // basic | notes | trips
+  const [activeTab, setActiveTab] = useState("basic");
+  const [isEditing, setIsEditing] = useState(false);
   const [editedClient, setEditedClient] = useState(null);
   const [noteText, setNoteText] = useState("");
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     if (isOpen && client) {
       setEditedClient(client);
       setNoteText("");
       setActiveTab("basic");
+      setIsEditing(initialEditMode && canEdit);
     }
-  }, [client, isOpen]);
+  }, [client, isOpen, initialEditMode, canEdit]);
 
-  if (!editedClient) return null;
+  if (!isOpen) return null;
 
   const handleSaveChanges = async (e) => {
     e.preventDefault();
-    if (!canEdit) return;
+    if (!canEdit || !editedClient) return;
+    setSaving(true);
     const success = await onUpdateClient(editedClient);
-    if (success) onClose();
+    setSaving(false);
+    if (success) {
+      setIsEditing(false);
+      onClose();
+    }
   };
 
   const handleAddNote = async () => {
-    if (!noteText.trim()) return;
+    if (!noteText.trim() || !editedClient) return;
     const success = await onAddNote(editedClient.id, noteText.trim());
     if (success) setNoteText("");
   };
 
   return (
-    <AppModal isOpen={isOpen} onClose={onClose} title="معلومات العميل" size="lg">
+    <AppModal
+      isOpen={isOpen}
+      onClose={onClose}
+      title={isEditing ? "تعديل بيانات العميل" : "معلومات العميل"}
+      subtitle={editedClient?.name ? String(editedClient.name) : undefined}
+      isSubmitting={saving}
+      size="lg"
+    >
+      {loading && (
+        <div className="flex justify-center py-16">
+          <div className="w-10 h-10 border-4 border-[#c9a84c] border-t-transparent rounded-full animate-spin" />
+        </div>
+      )}
+
+      {!loading && !editedClient && (
+        <p className="text-center text-sm text-gray-400 py-10">لا توجد بيانات للعرض</p>
+      )}
+
+      {!loading && editedClient && (
+        <>
         <div className="pt-1 pb-4 text-right">
           <div className="bg-[#F5F4F0] p-1 rounded-2xl flex items-center gap-1">
             <button
@@ -76,15 +129,42 @@ const ClientDetailsModal = ({ isOpen, onClose, client, onUpdateClient, onAddNote
               onClick={() => setActiveTab("trips")}
               className={`flex-1 text-center py-2 text-sm font-medium rounded-xl transition-all duration-200 ${activeTab === "trips" ? "bg-white text-gray-800 shadow-sm" : "text-gray-500 hover:text-gray-700"}`}
             >
-              سجل الرحلات
+              سجل الرحلات ({editedClient.tripHistory?.length ?? editedClient.trips?.total ?? 0})
             </button>
           </div>
         </div>
 
         <div className="max-h-[60vh] overflow-y-auto -mx-1 px-1 text-right">
-          
-          {/* 1. المعلومات الأساسية Tab */}
-          {activeTab === "basic" && (
+
+          {activeTab === "basic" && !isEditing && (
+            <div className="space-y-4">
+              <StaticField label="الاسم بالكامل" value={editedClient.name} />
+              <StaticField label="رقم الهاتف" value={editedClient.phone} dir="ltr" />
+              <StaticField label="العنوان" value={editedClient.address} />
+              <StaticField label="الجنسية" value={editedClient.nationality} />
+              <StaticField label="النوع" value={formatGenderLabel(editedClient.gender)} />
+              <StaticField label="إجمالي الرحلات" value={editedClient.trips?.total ?? editedClient.tripHistory?.length ?? 0} />
+              <div className="space-y-1.5 text-right pt-2">
+                <p className="text-xs font-medium text-gray-400">التقييم</p>
+                <div className="flex items-center gap-2 justify-end border border-gray-100 bg-gray-50 rounded-xl px-4 py-2.5" dir="ltr">
+                  <div className="flex gap-1">
+                    {[1, 2, 3, 4, 5].map((star) => (
+                      <svg
+                        key={star}
+                        className={`w-5 h-5 ${star <= Math.round(editedClient.rating) ? "fill-amber-400 text-amber-400" : "text-gray-200 fill-gray-200"}`}
+                        viewBox="0 0 20 20"
+                      >
+                        <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" />
+                      </svg>
+                    ))}
+                  </div>
+                  <span className="text-sm font-semibold text-gray-600 mt-0.5">{editedClient.rating}/5</span>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {activeTab === "basic" && isEditing && (
             <form onSubmit={handleSaveChanges} className="space-y-4">
               <div className="space-y-1.5 text-right">
                 <label className="text-xs font-medium text-gray-400 block">الاسم بالكامل</label>
@@ -93,7 +173,7 @@ const ClientDetailsModal = ({ isOpen, onClose, client, onUpdateClient, onAddNote
                   value={editedClient.name}
                   onChange={(e) => setEditedClient({ ...editedClient, name: e.target.value })}
                   className="w-full border border-gray-200 rounded-xl px-4 py-2 text-gray-700 text-sm focus:outline-none focus:border-amber-500 text-right"
-                  readOnly={!canEdit}
+                  required
                 />
               </div>
 
@@ -105,7 +185,7 @@ const ClientDetailsModal = ({ isOpen, onClose, client, onUpdateClient, onAddNote
                   onChange={(e) => setEditedClient({ ...editedClient, phone: e.target.value })}
                   className="w-full border border-gray-200 rounded-xl px-4 py-2 text-gray-700 text-sm focus:outline-none focus:border-amber-500 text-left"
                   dir="ltr"
-                  readOnly={!canEdit}
+                  required
                 />
               </div>
 
@@ -116,24 +196,31 @@ const ClientDetailsModal = ({ isOpen, onClose, client, onUpdateClient, onAddNote
                   value={editedClient.address}
                   onChange={(e) => setEditedClient({ ...editedClient, address: e.target.value })}
                   className="w-full border border-gray-200 rounded-xl px-4 py-2 text-gray-700 text-sm focus:outline-none focus:border-amber-500 text-right"
-                  readOnly={!canEdit}
+                />
+              </div>
+
+              <div className="space-y-1.5 text-right">
+                <label className="text-xs font-medium text-gray-400 block">الجنسية</label>
+                <input
+                  type="text"
+                  value={editedClient.nationality}
+                  onChange={(e) => setEditedClient({ ...editedClient, nationality: e.target.value })}
+                  className="w-full border border-gray-200 rounded-xl px-4 py-2 text-gray-700 text-sm focus:outline-none focus:border-amber-500 text-right"
                 />
               </div>
 
               <div className="space-y-1.5 text-right">
                 <label className="text-xs font-medium text-gray-400 block">النوع</label>
                 <select
-                  value={editedClient.gender}
+                  value={formatGenderLabel(editedClient.gender)}
                   onChange={(e) => setEditedClient({ ...editedClient, gender: e.target.value })}
                   className="w-full border border-gray-200 rounded-xl px-4 py-2 text-gray-700 text-sm focus:outline-none focus:border-amber-500 text-right bg-white"
-                  disabled={!canEdit}
                 >
                   <option value="ذكر">ذكر</option>
                   <option value="أنثى">أنثى</option>
                 </select>
               </div>
 
-              {/* التقييم بالنجوم */}
               <div className="space-y-1.5 text-right pt-2">
                 <label className="text-xs font-medium text-gray-400 block">التقييم</label>
                 <div className="flex items-center gap-2 justify-end" dir="ltr">
@@ -141,8 +228,8 @@ const ClientDetailsModal = ({ isOpen, onClose, client, onUpdateClient, onAddNote
                     {[1, 2, 3, 4, 5].map((star) => (
                       <svg
                         key={star}
-                        onClick={() => canEdit && setEditedClient({ ...editedClient, rating: star })}
-                        className={`w-5 h-5 ${canEdit ? "cursor-pointer" : "cursor-default"} ${star <= Math.round(editedClient.rating) ? "fill-amber-400 text-amber-400" : "text-gray-200 fill-gray-200"}`}
+                        onClick={() => setEditedClient({ ...editedClient, rating: star })}
+                        className={`w-5 h-5 cursor-pointer ${star <= Math.round(editedClient.rating) ? "fill-amber-400 text-amber-400" : "text-gray-200 fill-gray-200"}`}
                         viewBox="0 0 20 20"
                       >
                         <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" />
@@ -153,11 +240,22 @@ const ClientDetailsModal = ({ isOpen, onClose, client, onUpdateClient, onAddNote
                 </div>
               </div>
 
-              {canEdit && (
-                <button type="submit" className="w-full mt-6 bg-[#4A4A4A] text-white font-medium py-3 rounded-xl hover:bg-[#3d3d3d] transition-colors text-center shadow-sm">
-                  حفظ التغييرات
+              <div className="flex gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setIsEditing(false)}
+                  className="flex-1 border border-gray-200 text-gray-600 font-medium py-3 rounded-xl hover:bg-gray-50 transition-colors"
+                >
+                  إلغاء
                 </button>
-              )}
+                <button
+                  type="submit"
+                  disabled={saving}
+                  className="flex-1 bg-[#4A4A4A] text-white font-medium py-3 rounded-xl hover:bg-[#3d3d3d] transition-colors disabled:opacity-50"
+                >
+                  {saving ? "جاري الحفظ..." : "حفظ التغييرات"}
+                </button>
+              </div>
             </form>
           )}
 
@@ -258,6 +356,8 @@ const ClientDetailsModal = ({ isOpen, onClose, client, onUpdateClient, onAddNote
           )}
 
         </div>
+        </>
+      )}
     </AppModal>
   );
 };
@@ -269,6 +369,7 @@ export default function ClientsPage() {
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [selectedClient, setSelectedClient] = useState(null);
   const [selectedClientDetails, setSelectedClientDetails] = useState(null);
+  const [detailsEditMode, setDetailsEditMode] = useState(false);
   const [loading, setLoading] = useState(true);
   const [detailLoading, setDetailLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -295,13 +396,6 @@ export default function ClientsPage() {
     [clients, searchQuery]
   );
 
-  const mapApiNote = (note) => ({
-    id: note.id?.toString() || `${Date.now()}-${Math.random()}`,
-    author: note.author || "إداري",
-    date: note.note_date || note.created_at || "",
-    content: note.message || note.content || "",
-  });
-
   const mapCustomerToClient = (item) => ({
     id: item.id,
     name: item.full_name || item.name || item.customer_name || "--",
@@ -318,27 +412,17 @@ export default function ClientsPage() {
       cancelled: Number(item.cancelled_trips || item.cancelledTrips || 0),
       paused: Number(item.pending_trips || item.pausedTrips || 0),
     },
-    notes: Array.isArray(item.notes) ? item.notes.map(mapApiNote) : [],
+    notes: [],
     tripHistory: [],
   });
-
-  const fetchCustomerNotes = async (customerId) => {
-    try {
-      const response = await fetch(`${API_BASE}/api/customer-notes/${customerId}`);
-      if (!response.ok) throw new Error(`فشل جلب ملاحظات العميل: ${response.status}`);
-      const data = await response.json();
-      return Array.isArray(data.notes) ? data.notes.map(mapApiNote) : [];
-    } catch (err) {
-      console.warn(err);
-      return [];
-    }
-  };
 
   const fetchCustomers = async () => {
     setLoading(true);
     setError(null);
     try {
-      const response = await fetch(`${API_BASE}/api/Allcustomers`);
+      const response = await fetch(`${API_BASE}/Allcustomers`, {
+        headers: { Accept: "application/json" },
+      });
       if (!response.ok) throw new Error(`فشل جلب العملاء: ${response.status}`);
       const data = await response.json();
       const apiClients = Array.isArray(data.customers) ? data.customers.map(mapCustomerToClient) : [];
@@ -355,40 +439,12 @@ export default function ClientsPage() {
     setDetailLoading(true);
     setError(null);
     try {
-      const response = await fetch(`${API_BASE}/api/customers-details/${clientId}`);
-      if (!response.ok) throw new Error(`فشل جلب بيانات العميل: ${response.status}`);
-      const data = await response.json();
-      if (!data.customer) throw new Error("العميل غير موجود");
-      const customer = mapCustomerToClient(data.customer);
+      const customer = await fetchCustomerDetails(clientId);
       customer.notes = await fetchCustomerNotes(clientId);
-      // map trips from API
-      const statusColorMap = {
-        completed:  "bg-emerald-500",
-        pending:    "bg-blue-500",
-        cancelled:  "bg-red-500",
-        suspended:  "bg-gray-400",
-        in_progress:"bg-blue-600",
-      };
-      const statusLabelMap = {
-        completed:  "مكتملة",
-        pending:    "موقوفة",
-        cancelled:  "ملغية",
-        suspended:  "موقوفة",
-        in_progress:"قيد التنفيذ",
-      };
-      customer.tripHistory = Array.isArray(data.customer.trips)
-        ? data.customer.trips.map(t => ({
-            id: `#${t.id}`,
-            from: t.from || "—",
-            to:   t.to   || "—",
-            date: t.trip_date || t.start_date || "",
-            status:      statusLabelMap[t.status] || t.status,
-            statusColor: statusColorMap[t.status] || "bg-gray-400",
-          }))
-        : [];
       setSelectedClientDetails(customer);
     } catch (err) {
       setError(err.message || "حدث خطأ أثناء تحميل بيانات العميل");
+      setSelectedClientDetails(null);
     } finally {
       setDetailLoading(false);
     }
@@ -405,21 +461,19 @@ export default function ClientsPage() {
   const confirmDelete = async () => {
     setDeleteLoading(true);
     try {
-      const response = await fetch(`${API_BASE}/api/customers/${deleteConfirm.id}`, {
-        method: "DELETE",
-      });
-      if (!response.ok && response.status !== 204) throw new Error(`فشل حذف العميل: ${response.status}`);
+      await deleteCustomer(deleteConfirm.id);
       setClients((prev) => {
         const updated = prev.filter((c) => c.id !== deleteConfirm.id);
-        setTotalClients(p => Math.max(0, p - 1));
+        setTotalClients((p) => Math.max(0, p - 1));
         return updated;
       });
       if (selectedClientDetails && String(selectedClientDetails.id) === String(deleteConfirm.id)) {
         setSelectedClientDetails(null);
         setSelectedClient(null);
       }
+      toast.success("تم حذف العميل");
     } catch (err) {
-      console.error(err.message);
+      toast.error(err.message || "فشل حذف العميل");
     } finally {
       setDeleteLoading(false);
       setDeleteConfirm({ open: false, id: null, name: "" });
@@ -446,35 +500,24 @@ export default function ClientsPage() {
 
   const handleUpdateClient = async (updatedClient) => {
     try {
-      const response = await fetch(`${API_BASE}/api/customers/update/${updatedClient.id}`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          full_name: updatedClient.name,
-          phone: updatedClient.phone,
-          address: updatedClient.address,
-          customer_nationality: updatedClient.nationality,
-          gender: updatedClient.gender,
-        }),
+      const customer = await updateCustomer(updatedClient.id, {
+        name: updatedClient.name,
+        phone: updatedClient.phone,
+        address: updatedClient.address,
+        gender: updatedClient.gender,
+        nationality: updatedClient.nationality,
       });
-
-      if (!response.ok) throw new Error(`فشل تحديث العميل: ${response.status}`);
-      const data = await response.json();
-      const customer = data.customer || {};
       const updated = {
         ...updatedClient,
-        name: customer.full_name || updatedClient.name,
-        phone: customer.phone || updatedClient.phone,
-        address: customer.address || updatedClient.address,
-        gender: customer.gender || updatedClient.gender,
-        nationality: customer.customer_nationality || updatedClient.nationality,
+        ...customer,
+        name: customer.name,
+        rating: updatedClient.rating,
+        notes: updatedClient.notes,
+        tripHistory: updatedClient.tripHistory,
+        trips: updatedClient.trips,
       };
-      setClients((prev) => prev.map((c) => c.id === updated.id ? updated : c));
-      if (selectedClientDetails && String(selectedClientDetails.id) === String(updated.id)) {
-        setSelectedClientDetails((prev) => prev ? { ...prev, ...updated } : prev);
-      }
+      setClients((prev) => prev.map((c) => (String(c.id) === String(updated.id) ? { ...c, ...updated } : c)));
+      setSelectedClientDetails((prev) => (prev ? { ...prev, ...updated } : prev));
       toast.success("تم تحديث بيانات العميل");
       return true;
     } catch (err) {
@@ -483,11 +526,18 @@ export default function ClientsPage() {
     }
   };
 
+  const mapApiNote = (note) => ({
+    id: note.id?.toString() || `${Date.now()}-${Math.random()}`,
+    author: note.author || "إداري",
+    date: note.note_date || note.created_at || "",
+    content: note.message || note.content || "",
+  });
+
   const handleAddNote = async (customerId, noteMessage) => {
     if (!noteMessage) return false;
     try {
       const date = new Date().toISOString().split("T")[0];
-      const response = await fetch(`${API_BASE}/api/customer-notes`, {
+      const response = await fetch(`${API_BASE}/customer-notes`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -515,15 +565,20 @@ export default function ClientsPage() {
     }
   };
 
-  const handleOpenDetails = async (client) => {
+  const openClientModal = async (client, editMode = false) => {
     setSelectedClient(client);
     setSelectedClientDetails(null);
+    setDetailsEditMode(editMode);
     await fetchClientDetails(client.id);
   };
+
+  const handleOpenDetails = (client) => openClientModal(client, false);
+  const handleOpenEdit = (client) => openClientModal(client, true);
 
   const handleCloseDetails = () => {
     setSelectedClient(null);
     setSelectedClientDetails(null);
+    setDetailsEditMode(false);
     setDetailLoading(false);
   };
 
@@ -623,7 +678,7 @@ export default function ClientsPage() {
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
                     d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
                 </svg>
-                الجنس: {client.gender}
+                الجنس: {formatGenderLabel(client.gender)}
               </span>
               <span className="flex items-center gap-1">
                 <svg className="w-3.5 h-3.5 text-gray-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -658,7 +713,7 @@ export default function ClientsPage() {
               </button>
               {canEdit && (
                 <button 
-                  onClick={() => handleOpenDetails(client)}
+                  onClick={() => handleOpenEdit(client)}
                   className="p-2 border border-gray-200 text-gray-500 rounded-lg hover:bg-gray-50 transition-colors"
                   title="تعديل"
                 >
@@ -699,6 +754,8 @@ export default function ClientsPage() {
           isOpen={!!(selectedClient || selectedClientDetails)}
           onClose={handleCloseDetails}
           client={selectedClientDetails || selectedClient}
+          loading={detailLoading}
+          initialEditMode={detailsEditMode}
           onUpdateClient={handleUpdateClient}
           onAddNote={handleAddNote}
         />

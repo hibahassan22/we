@@ -12,7 +12,7 @@ async function salesHeaders(json = false) {
   return h;
 }
 
-/** أدوار Firebase المرتبطة بسجل /api/sales (الدور في Firebase، الـ id = uid) */
+/** أدوار مرتبطة بسجل /api/sales (للتوافق مع نماذج قديمة) */
 export const SALES_LINKED_ROLES = new Set([ROLES.SUPPORT]);
 
 export function isSalesLinkedRole(role) {
@@ -83,13 +83,24 @@ export async function fetchSalesList() {
   return Array.isArray(data) ? data : data?.data ?? data?.sales ?? [];
 }
 
+/** GET /api/sales/{id} — ملف موظف مبيعات */
+export async function fetchSalesById(id) {
+  const salesId = String(id ?? "").trim();
+  if (!salesId) throw new Error("معرّف الموظف غير صالح");
+  const res = await fetch(`${API_BASE}/sales/${encodeURIComponent(salesId)}`, {
+    headers: { Accept: "application/json" },
+  });
+  const data = await parseResponse(res);
+  return data?.sale ?? data?.data ?? data;
+}
+
 /** تحويل سجل /api/sales لشكل مستخدم في الواجهة */
-export function salesRecordToUser(sale, roleFallback) {
-  const id = String(sale.id);
+export function salesRecordToUser(sale) {
+  const id = String(sale.id ?? "");
   const role =
     sale.role_id != null && sale.role_id !== ""
       ? String(sale.role_id)
-      : roleFallback ?? ROLES.SUPPORT;
+      : "";
   return {
     uid: id,
     id,
@@ -101,51 +112,15 @@ export function salesRecordToUser(sale, roleFallback) {
     department: "",
     permissions: [],
     createdAt: sale.created_at ?? null,
+    target: sale.target ?? sale.main_target ?? null,
     fromSalesApi: true,
     salesRecord: sale,
   };
 }
 
-/**
- * دمج مستخدمي Firebase مع GET /api/sales
- * — الدور من Firebase عند تطابق id
- * — سجلات API فقط تظهر كخدمة عملاء
- */
-export function mergeUsersWithSales(firebaseUsers = [], salesList = []) {
-  const map = new Map();
-
-  firebaseUsers.forEach((user) => {
-    const id = String(user.uid ?? user.id);
-    map.set(id, { ...user, uid: id, id });
-  });
-
-  salesList.forEach((sale) => {
-    const id = String(sale.id);
-    const existing = map.get(id);
-    if (existing) {
-      map.set(id, {
-        ...existing,
-        fullName: existing.fullName || sale.name || "",
-        email: existing.email || sale.email || "",
-        phone: existing.phone || sale.phone || "",
-        status: existing.status || sale.status || "active",
-        salesRecord: sale,
-      });
-    } else {
-      map.set(id, salesRecordToUser(sale));
-    }
-  });
-
-  return Array.from(map.values()).sort((a, b) => {
-    const ta = a.createdAt?.toDate?.() ?? new Date(a.createdAt ?? 0);
-    const tb = b.createdAt?.toDate?.() ?? new Date(b.createdAt ?? 0);
-    return tb - ta;
-  });
-}
-
 export function generateSalesId() {
-  const suffix = Math.random().toString(36).slice(2, 10);
-  return `#sale${Date.now().toString(36)}${suffix}`;
+  const suffix = Math.random().toString(36).slice(2, 8);
+  return `abc${suffix}${Date.now().toString(36).slice(-3)}`;
 }
 
 export function filterSalesUsers(users, { search = "", role = "", status = "" } = {}) {
@@ -185,23 +160,14 @@ export async function createSalesRecord({ id, name, phone = "", email, password,
     role_id: parsedRoleId,
     email: String(email).trim().toLowerCase(),
   };
+  if (password) body.password = String(password);
 
   const res = await fetch(`${API_BASE}/sales`, {
     method: "POST",
     headers: { Accept: "application/json", "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
-  const data = await parseResponse(res);
-
-  if (password) {
-    try {
-      await updateSalesRecord(salesId, { password: String(password) });
-    } catch (err) {
-      console.warn("[sales] password update failed:", err);
-    }
-  }
-
-  return data;
+  return parseResponse(res);
 }
 
 /** DELETE /api/sales/{id} */

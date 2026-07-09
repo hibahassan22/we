@@ -1,9 +1,7 @@
-import { doc, getDoc, setDoc } from "firebase/firestore";
-import { db } from "../firebase/firestore.js";
 import { getIdToken } from "./authService.js";
+import { fetchRolePermissionLinks, syncRolePermissions } from "./permissionService.js";
 
-const BASE = "https://drivo1.elmoroj.com/api";
-const PERMS_COLLECTION = "roles";
+const API_BASE = "/api";
 
 async function authHeaders(json = false) {
   const token = await getIdToken();
@@ -25,33 +23,21 @@ async function parseResponse(res) {
   return data;
 }
 
-function normalizeRole(apiRole, permissions = []) {
+function normalizeRole(apiRole, permissionLinks = []) {
+  const rolePerms = permissionLinks
+    .filter((rp) => String(rp.role_id) === String(apiRole.id))
+    .map((rp) => rp.permission ?? { id: rp.permission_id })
+    .filter(Boolean);
+
   return {
     id: apiRole.id,
     name: apiRole.role_name ?? apiRole.name ?? "",
     description: apiRole.description ?? "",
     createdAt: apiRole.created_at ?? apiRole.createdAt,
     updatedAt: apiRole.updated_at ?? apiRole.updatedAt,
-    permissions,
+    permissions: rolePerms,
+    permissionIds: rolePerms.map((p) => p.id),
   };
-}
-
-async function fetchFirebasePermissions(roleId) {
-  try {
-    const snap = await getDoc(doc(db, PERMS_COLLECTION, String(roleId)));
-    if (!snap.exists()) return [];
-    return snap.data().permissions ?? [];
-  } catch {
-    return [];
-  }
-}
-
-async function saveFirebasePermissions(roleId, permissions) {
-  await setDoc(
-    doc(db, PERMS_COLLECTION, String(roleId)),
-    { permissions, updatedAt: new Date().toISOString() },
-    { merge: true }
-  );
 }
 
 export function isProtectedRole(role) {
@@ -62,14 +48,13 @@ export function isProtectedRole(role) {
 }
 
 export async function fetchRoles() {
-  const res = await fetch(`${BASE}/roles`, { headers: await authHeaders() });
-  const data = await parseResponse(res);
-  const list = Array.isArray(data?.data) ? data.data : [];
+  const [rolesRes, links] = await Promise.all([
+    fetch(`${API_BASE}/roles`, { headers: await authHeaders() }).then(parseResponse),
+    fetchRolePermissionLinks().catch(() => []),
+  ]);
 
-  const roles = await Promise.all(
-    list.map(async (r) => normalizeRole(r, await fetchFirebasePermissions(r.id)))
-  );
-
+  const list = Array.isArray(rolesRes?.data) ? rolesRes.data : [];
+  const roles = list.map((r) => normalizeRole(r, links));
   return roles.sort((a, b) => Number(a.id) - Number(b.id));
 }
 
@@ -84,11 +69,11 @@ export function subscribeRoles(callback) {
   return () => {};
 }
 
-export async function createRole({ name, description = "", permissions = [] }) {
+export async function createRole({ name, description = "" }) {
   const trimmedName = name?.trim();
   if (!trimmedName) throw new Error("اسم الدور مطلوب");
 
-  const res = await fetch(`${BASE}/roles`, {
+  const res = await fetch(`${API_BASE}/roles`, {
     method: "POST",
     headers: await authHeaders(true),
     body: JSON.stringify({
@@ -98,13 +83,7 @@ export async function createRole({ name, description = "", permissions = [] }) {
   });
 
   const data = await parseResponse(res);
-  const role = normalizeRole(data?.data ?? data, permissions);
-
-  if (permissions.length) {
-    await saveFirebasePermissions(role.id, permissions);
-  }
-
-  return role;
+  return normalizeRole(data?.data ?? data, []);
 }
 
 export async function updateRole(roleId, patch) {
@@ -115,7 +94,7 @@ export async function updateRole(roleId, patch) {
   if (patch.description !== undefined) body.description = patch.description;
 
   if (Object.keys(body).length) {
-    const res = await fetch(`${BASE}/roles/${roleId}`, {
+    const res = await fetch(`${API_BASE}/roles/${roleId}`, {
       method: "PUT",
       headers: await authHeaders(true),
       body: JSON.stringify(body),
@@ -123,25 +102,22 @@ export async function updateRole(roleId, patch) {
     await parseResponse(res);
   }
 
-  if (patch.permissions !== undefined) {
-    await saveFirebasePermissions(roleId, patch.permissions);
+  if (patch.permissionIds !== undefined) {
+    await syncRolePermissions(roleId, patch.permissionIds);
   }
 }
 
-export async function updateRolePermissions(roleId, permissions) {
+export async function updateRolePermissions(roleId, permissionIds) {
   if (!roleId) throw new Error("معرّف الدور مطلوب");
-  if (isProtectedRole({ id: roleId })) {
-    await saveFirebasePermissions(roleId, ["*"]);
-    return;
-  }
-  await saveFirebasePermissions(roleId, Array.isArray(permissions) ? permissions : []);
+  if (isProtectedRole({ id: roleId })) return;
+  await syncRolePermissions(roleId, Array.isArray(permissionIds) ? permissionIds : []);
 }
 
 export async function deleteRole(roleId) {
   if (!roleId) throw new Error("معرّف الدور مطلوب");
   if (isProtectedRole({ id: roleId })) throw new Error("لا يمكن حذف دور مدير النظام");
 
-  const res = await fetch(`${BASE}/roles/${roleId}`, {
+  const res = await fetch(`${API_BASE}/roles/${roleId}`, {
     method: "DELETE",
     headers: await authHeaders(),
   });
