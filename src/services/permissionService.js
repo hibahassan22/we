@@ -1,4 +1,5 @@
 import { getIdToken } from "./authService.js";
+import { apiPermissionsToInternalKeys, expandPermIdKeys } from "../lib/apiPermissionBridge.js";
 
 const API_BASE = "/api";
 
@@ -120,6 +121,38 @@ export async function deleteRolePermissionLink(linkId) {
     headers: await authHeaders(),
   });
   await parseResponse(res);
+}
+
+/** يملأ كائن الصلاحية من permission_id عند غياب permission في رابط الدور */
+export function enrichRolePermissionLinks(links = [], catalog = []) {
+  const byId = new Map(catalog.map((p) => [String(p.id), p]));
+  return links.map((link) => {
+    if (link?.permission?.id != null) return link.permission;
+    const pid = link?.permission_id ?? link?.permission?.id;
+    if (pid == null) return null;
+    return byId.get(String(pid)) ?? { id: pid, permission_name: "", module: "" };
+  }).filter((p) => p?.id != null);
+}
+
+/** تحميل مفاتيح الصلاحيات الداخلية لدور — من /api/role-permissions فقط */
+export async function loadRolePermissionKeys(roleId) {
+  const [links, catalog] = await Promise.all([
+    fetchRolePermissionLinksByRoleId(roleId),
+    fetchPermissions(),
+  ]);
+
+  const permObjects = enrichRolePermissionLinks(links, catalog);
+  const keys = new Set(apiPermissionsToInternalKeys(permObjects));
+
+  for (const link of links) {
+    const pid = link?.permission_id ?? link?.permission?.id;
+    if (pid == null) continue;
+    const token = `perm:${pid}`;
+    keys.add(token);
+    expandPermIdKeys(token).forEach((k) => keys.add(k));
+  }
+
+  return [...keys];
 }
 
 /** ربط كل صلاحيات النظام بدور معيّن */

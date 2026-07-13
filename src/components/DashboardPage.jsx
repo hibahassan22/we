@@ -12,7 +12,14 @@ import {
   tripListLabel,
   ARABIC_MONTHS,
 } from "../lib/tripChartUtils.js";
-import { fetchAllTripsForList, fetchOfferedTripsList } from "../services/tripService.js";
+import {
+  fetchAllTripsForList,
+  fetchOfferedTripsList,
+  fetchTripsHasDriverMap,
+  hasAssignedDriver,
+} from "../services/tripService.js";
+import { exportWorkbook, tripToExportRow } from "../lib/exportExcel.js";
+import { useToast } from "../lib/toast.jsx";
 
 const API_BASE = "/api";
 
@@ -277,23 +284,14 @@ function chartStatusColor(label) {
   return STATUS_COLORS[label] ?? STATUS_COLORS[String(label).toLowerCase()] ?? "#888888";
 }
 
-const ACTIVE_TRIP_STATUSES = new Set([
-  "active",
-  "شغال",
-  "قيد التنفيذ",
-  "in_progress",
-  "progress",
-]);
-
-function tripStatusValue(trip) {
-  return String(trip?.trip_status ?? trip?.status ?? "").trim();
+function tripHasAssignedDriver(trip, driverStatusMap = {}) {
+  const key = String(trip?.id ?? "");
+  if (driverStatusMap[key] !== undefined) return driverStatusMap[key];
+  return hasAssignedDriver(trip);
 }
 
-function isActiveTrip(trip) {
-  const status = tripStatusValue(trip);
-  if (!status) return false;
-  const lower = status.toLowerCase();
-  return ACTIVE_TRIP_STATUSES.has(lower) || ACTIVE_TRIP_STATUSES.has(status);
+function countAssignedTrips(tripList = [], driverStatusMap = {}) {
+  return tripList.filter((trip) => tripHasAssignedDriver(trip, driverStatusMap)).length;
 }
 
 function isActiveDriver(driver) {
@@ -305,10 +303,6 @@ function isActiveDriver(driver) {
   return text === "نشط" || text === "active";
 }
 
-function countActiveTrips(tripList = []) {
-  return tripList.filter(isActiveTrip).length;
-}
-
 function countActiveDrivers(driverList = []) {
   return driverList.filter(isActiveDriver).length;
 }
@@ -317,9 +311,11 @@ function countActiveDrivers(driverList = []) {
 // 2. Main Component
 // =================================================================
 export default function DashboardPage() {
+  const toast = useToast();
   const [counts, setCounts] = useState(null);
   const [trips, setTrips] = useState([]);
   const [drivers, setDrivers] = useState([]);
+  const [driverStatusMap, setDriverStatusMap] = useState({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [dateFilter, setDateFilter] = useState("thisYear");
@@ -352,6 +348,33 @@ export default function DashboardPage() {
   useEffect(() => {
     fetchData();
   }, [fetchData]);
+
+  useEffect(() => {
+    if (!trips.length) {
+      setDriverStatusMap({});
+      return;
+    }
+
+    const needCheck = trips.filter((trip) => !hasAssignedDriver(trip));
+    if (!needCheck.length) {
+      setDriverStatusMap({});
+      return;
+    }
+
+    const ctrl = new AbortController();
+    fetchTripsHasDriverMap(
+      needCheck.map((trip) => trip.id),
+      ctrl.signal,
+    )
+      .then((map) => {
+        if (!ctrl.signal.aborted) setDriverStatusMap(map);
+      })
+      .catch((err) => {
+        if (err?.name !== "AbortError") console.error("[Dashboard] has-driver", err);
+      });
+
+    return () => ctrl.abort();
+  }, [trips]);
 
   useEffect(() => {
     setSelectedBarIndex(null);
@@ -408,11 +431,12 @@ export default function DashboardPage() {
     return Object.values(statusCounts);
   }, [scopedTrips]);
 
-  const handlePrint = () => window.print();
-
   const totalTrips = trips.length;
 
-  const activeTripsCount = useMemo(() => countActiveTrips(trips), [trips]);
+  const activeTripsCount = useMemo(
+    () => countAssignedTrips(trips, driverStatusMap),
+    [trips, driverStatusMap],
+  );
   const activeDriversCount = useMemo(() => countActiveDrivers(drivers), [drivers]);
 
   const stats = [
@@ -438,6 +462,36 @@ export default function DashboardPage() {
     },
   ];
 
+  const handleExport = () => {
+    try {
+      const tripRows = scopedTrips.map((t) => {
+        const variant = t.trip_status != null && t.trip_status !== "" ? "driver" : "offered";
+        return tripToExportRow(t, variant);
+      });
+
+      exportWorkbook(
+        [
+          {
+            name: "الإحصائيات",
+            rows: stats.map((s) => ({ البند: s.label, القيمة: s.value ?? 0 })),
+          },
+          {
+            name: "حالات الرحلات",
+            rows: statusChartData.map((s) => ({ الحالة: s.label, العدد: s.value })),
+          },
+          {
+            name: "الرحلات",
+            rows: tripRows,
+          },
+        ],
+        "لوحة_التحكم"
+      );
+      toast.success("تم تصدير البيانات بنجاح");
+    } catch (err) {
+      toast.error(err.message || "فشل التصدير");
+    }
+  };
+
   return (
     <div className="w-full space-y-5 p-4" dir="rtl">
       {/* Header */}
@@ -447,7 +501,7 @@ export default function DashboardPage() {
           <p className="text-xs text-gray-400">تحليلات شاملة لأداء النظام</p>
         </div>
         <button
-          onClick={handlePrint}
+          onClick={handleExport}
           className="flex items-center gap-1.5 border border-gray-200 text-gray-600 text-xs px-3 py-2 rounded-lg hover:bg-gray-50 transition-colors"
         >
           <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">

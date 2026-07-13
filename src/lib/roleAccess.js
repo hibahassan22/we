@@ -7,6 +7,7 @@
  * - admin دائماً لديه ["*"] = وصول كامل
  */
 import { expandPermissions, hasPermission, hasAnyPermission, canAccessRoute } from "./permissions.js";
+import { expandPermIdKeys } from "./apiPermissionBridge.js";
 import { ROLES, DEFAULT_ROLE_PERMISSIONS } from "./roles.js";
 
 const ROUTE_PRIORITY = [
@@ -27,9 +28,28 @@ const ROUTE_PRIORITY = [
   "/settings",
 ];
 
+/** توسيع perm:47 وغيرها إلى مفاتيح Trips.Read */
+function expandWithPermIds(permissions = []) {
+  const set = new Set(expandPermissions(permissions));
+  for (const p of permissions) {
+    if (typeof p === "string" && p.startsWith("perm:")) {
+      set.add(p);
+      expandPermIdKeys(p).forEach((k) => set.add(k));
+    }
+  }
+  for (const p of set) {
+    if (typeof p === "string" && p.startsWith("perm:")) {
+      expandPermIdKeys(p).forEach((k) => set.add(k));
+    }
+  }
+  return [...set];
+}
+
 /** دمج دور المستخدم + قالب الدور من Firebase + أي صلاحيات فردية */
 export function resolvePermissions(roleId, roleDocPermissions, userPermissions = []) {
   const role = roleId || ROLES.SUPPORT;
+
+  if (Array.isArray(roleDocPermissions) && roleDocPermissions.includes("*")) return ["*"];
 
   if (role === ROLES.ADMIN) return ["*"];
 
@@ -41,11 +61,15 @@ export function resolvePermissions(roleId, roleDocPermissions, userPermissions =
     return roleDocPermissions;
   }
 
-  return DEFAULT_ROLE_PERMISSIONS[role] ?? [];
+  if (roleId && Object.prototype.hasOwnProperty.call(DEFAULT_ROLE_PERMISSIONS, role)) {
+    return DEFAULT_ROLE_PERMISSIONS[role];
+  }
+
+  return [];
 }
 
 export function createRoleAccess({ roleId, permissions = [] } = {}) {
-  const expanded = expandPermissions(permissions);
+  const expanded = expandWithPermIds(permissions);
   const isAdmin = expanded.includes("*");
 
   return {

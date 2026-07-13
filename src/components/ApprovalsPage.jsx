@@ -1,5 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { useGlobalSearch } from "../hooks/useGlobalSearch";
+import { usePermissions } from "../hooks/usePermissions.js";
+import { PERMISSIONS } from "../lib/permissions.js";
 import { fetchAllRefunds } from "../services/refundService";
 import {
   fetchPaymentRequests,
@@ -54,7 +56,25 @@ const FIELD_LABELS = {
 
 const typeOptions = ["الكل", "تعديل رحلة", "طلبات الدفعات", "طلبات الركاب", "مرتجعات"];
 
-const isPendingRequest = (req) => req.status === "معلق";
+const isPendingRequest = (req) => req.status === "معلق" || String(req.raw?.status ?? "").toLowerCase() === "pending";
+
+function parseOperationDays(raw) {
+  if (raw == null || raw === "") return "";
+  if (Array.isArray(raw)) return raw.join("، ");
+  if (typeof raw === "string") {
+    const trimmed = raw.trim();
+    if (trimmed.startsWith("[")) {
+      try {
+        const parsed = JSON.parse(trimmed);
+        if (Array.isArray(parsed)) return parsed.join("، ");
+      } catch {
+        /* keep raw string */
+      }
+    }
+    return trimmed;
+  }
+  return String(raw);
+}
 
 const typeConfig = {
   "تعديل رحلة": {
@@ -259,9 +279,7 @@ function normalizePassengerRequest(item) {
     }
   }
 
-  const operationDays = Array.isArray(item.operation_days)
-    ? item.operation_days.join("، ")
-    : (item.operation_days ?? "");
+  const operationDays = parseOperationDays(item.operation_days);
 
   return {
     id: item.id ?? item.request_id,
@@ -299,6 +317,8 @@ function parseList(data) {
 }
 
 export default function ApprovalsPage() {
+  const { can } = usePermissions();
+  const canApprove = can(PERMISSIONS.APPROVALS_EDIT) || can(PERMISSIONS.APPROVALS_READ);
   const [requests, setRequests] = useState([]);
   const [paymentRequests, setPaymentRequests] = useState([]);
   const [passengerRequests, setPassengerRequests] = useState([]);
@@ -516,7 +536,7 @@ export default function ApprovalsPage() {
           )}
         </div>
 
-        {req.status === "معلق" && (
+        {req.status === "معلق" && canApprove && (
           <div className="grid grid-cols-2 gap-3 pt-1">
             <button
               disabled={actionLoading === req.id}
@@ -615,7 +635,7 @@ export default function ApprovalsPage() {
           )}
         </div>
 
-        {req.status === "معلق" && (
+        {req.status === "معلق" && canApprove && (
           <div className="grid grid-cols-2 gap-3 pt-1">
             <button
               disabled={isLoading}
@@ -707,21 +727,23 @@ export default function ApprovalsPage() {
           )}
         </div>
 
-        {req.status === "معلق" && (
+        {req.status === "معلق" && canApprove && (
           <div className="grid grid-cols-2 gap-3 pt-1">
             <button
+              type="button"
               disabled={actionLoading === actionKey}
               onClick={() => handleRejectPassenger(req.id)}
-              className="py-2.5 rounded-xl border border-red-200 text-red-500 text-sm font-medium hover:bg-red-50 transition-colors disabled:opacity-50"
+              className="flex items-center justify-center gap-2 bg-red-500 hover:bg-red-600 text-white text-sm font-medium py-2.5 rounded-xl transition-colors disabled:opacity-50"
             >
-              {actionLoading === actionKey ? "..." : "رفض"}
+              {actionLoading === actionKey ? "جارٍ الرفض..." : "رفض الطلب"}
             </button>
             <button
+              type="button"
               disabled={actionLoading === actionKey}
               onClick={() => handleApprovePassenger(req.id)}
-              className="py-2.5 rounded-xl bg-green-500 hover:bg-green-600 text-white text-sm font-medium transition-colors disabled:opacity-50"
+              className="flex items-center justify-center gap-2 bg-green-500 hover:bg-green-600 text-white text-sm font-medium py-2.5 rounded-xl transition-colors disabled:opacity-50"
             >
-              {actionLoading === actionKey ? "..." : "موافقة"}
+              {actionLoading === actionKey ? "جارٍ الموافقة..." : "الموافقة على الطلب"}
             </button>
           </div>
         )}
@@ -779,7 +801,7 @@ export default function ApprovalsPage() {
           </div>
         </div>
 
-        {req.status === "معلق" && (
+        {req.status === "معلق" && canApprove && (
           <button
             type="button"
             onClick={() => setRefundModal(req.raw)}

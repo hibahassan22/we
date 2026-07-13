@@ -21,9 +21,38 @@ export function getRoleLabel(roleId, roles = []) {
 }
 
 export function getDefaultRoleId(roles = []) {
-  const support = roles.find((r) => String(r.id) === "support" || r.name === "خدمة عملاء");
+  const support = findSupportRole(roles);
   if (support) return String(support.id);
   return roles[0]?.id != null ? String(roles[0].id) : "";
+}
+
+/** هل الدور هو «خدمة عملاء»؟ يقبل كائن دور أو roleId + name */
+export function isSupportRole(roleOrId, roleName = "") {
+  if (roleOrId && typeof roleOrId === "object") {
+    const id = String(roleOrId.id ?? roleOrId.role_id ?? "");
+    const name = String(roleOrId.name ?? roleOrId.role_name ?? "").trim();
+    return (
+      id === "6" ||
+      id === "support" ||
+      name === "خدمة عملاء" ||
+      name === "خدمة العملاء" ||
+      (name.includes("خدمة") && name.includes("عمل"))
+    );
+  }
+  const id = String(roleOrId ?? "");
+  const name = String(roleName ?? "").trim();
+  return (
+    id === "6" ||
+    id === "support" ||
+    name === "خدمة عملاء" ||
+    name === "خدمة العملاء" ||
+    (name.includes("خدمة") && name.includes("عمل"))
+  );
+}
+
+/** يُعثر على دور خدمة العملاء من قائمة الأدوار */
+export function findSupportRole(roles = []) {
+  return roles.find((r) => isSupportRole(r));
 }
 
 /** يُرجع معرّف دور رقمي صالح للـ API أو null */

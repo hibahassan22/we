@@ -15,6 +15,7 @@ import {
   deleteCustomer,
   formatGenderLabel,
 } from "../services/customerService.js";
+import { exportToExcel } from "../lib/exportExcel.js";
 
 const API_BASE = "/api";
 
@@ -50,6 +51,7 @@ const ClientDetailsModal = ({
   onAddNote,
 }) => {
   const { can } = usePermissions();
+  const canView = can(PERMISSIONS.CLIENTS_READ);
   const canEdit = can(PERMISSIONS.CLIENTS_EDIT);
   const canExport = can(PERMISSIONS.CLIENTS_EXPORT);
   const [activeTab, setActiveTab] = useState("basic");
@@ -332,15 +334,20 @@ const ClientDetailsModal = ({
                   {canExport && (
                   <button
                     onClick={() => {
-                      const rows = editedClient.tripHistory.map(t =>
-                        `${t.id}\t${t.from}\t${t.to}\t${t.date}\t${t.status}`
-                      ).join("\n");
-                      const header = "رقم الرحلة\tمن\tإلى\tالتاريخ\tالحالة\n";
-                      const blob = new Blob(["\uFEFF" + header + rows], { type: "text/plain;charset=utf-8" });
-                      const url = URL.createObjectURL(blob);
-                      const a = document.createElement("a");
-                      a.href = url; a.download = `رحلات_${editedClient.name}.txt`;
-                      a.click(); URL.revokeObjectURL(url);
+                      const rows = (editedClient.tripHistory ?? []).map((t) => ({
+                        "رقم الرحلة": t.id ?? "—",
+                        "من": t.from ?? "—",
+                        "إلى": t.to ?? "—",
+                        "التاريخ": t.date
+                          ? new Date(t.date).toLocaleDateString("ar-SA")
+                          : "—",
+                        "الحالة": t.status ?? "—",
+                      }));
+                      try {
+                        exportToExcel(rows, `رحلات_${editedClient.name}`, "رحلات العميل");
+                      } catch (err) {
+                        alert(err.message || "فشل التصدير");
+                      }
                     }}
                     className="w-full border border-gray-200 text-gray-500 text-sm py-2.5 rounded-xl hover:bg-gray-50 transition-colors text-center mt-4 flex items-center justify-center gap-1"
                   >
@@ -380,8 +387,10 @@ export default function ClientsPage() {
   const { user } = useAuthContext();
   const { can } = usePermissions();
   const canCreate = can(PERMISSIONS.CLIENTS_CREATE);
+  const canView = can(PERMISSIONS.CLIENTS_READ);
   const canEdit = can(PERMISSIONS.CLIENTS_EDIT);
   const canDelete = can(PERMISSIONS.CLIENTS_DELETE);
+  const canExport = can(PERMISSIONS.CLIENTS_EXPORT);
   const { searchQuery } = useGlobalSearch();
 
   const filteredClients = useMemo(
@@ -582,6 +591,32 @@ export default function ClientsPage() {
     setDetailLoading(false);
   };
 
+  const handleExportClients = () => {
+    if (!filteredClients.length) {
+      toast.error("لا توجد بيانات للتصدير");
+      return;
+    }
+    try {
+      const rows = filteredClients.map((c) => ({
+        "الاسم": c.name || "—",
+        "رقم الهاتف": c.phone || "—",
+        "العنوان": c.address || "—",
+        "الجنس": formatGenderLabel(c.gender) || "—",
+        "الجنسية": c.nationality || "—",
+        "التقييم": c.rating ?? "—",
+        "الحالة": c.status || "—",
+        "إجمالي الرحلات": c.trips?.total ?? 0,
+        "رحلات نشطة": c.trips?.active ?? 0,
+        "رحلات مكتملة": c.trips?.completed ?? 0,
+        "رحلات ملغاة": c.trips?.cancelled ?? 0,
+      }));
+      exportToExcel(rows, "قائمة_العملاء", "العملاء");
+      toast.success("تم تصدير البيانات بنجاح");
+    } catch (err) {
+      toast.error(err.message || "فشل التصدير");
+    }
+  };
+
   return (
     <div className="w-full space-y-4 p-4 md:p-6" dir="rtl">
 
@@ -596,9 +631,21 @@ export default function ClientsPage() {
           جارٍ تحميل بيانات العملاء...
         </div>
       )}
-      <div className="bg-white rounded-2xl shadow-sm p-4 text-right">
-        <h1 className="text-xl font-bold text-[#c9a84c]">قائمة العملاء</h1>
-        <p className="text-xs text-gray-400 mt-0.5">تابع كل بيانات العملاء بسهولة</p>
+      <div className="bg-white rounded-2xl shadow-sm p-4 text-right flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+        <div>
+          <h1 className="text-xl font-bold text-[#c9a84c]">قائمة العملاء</h1>
+          <p className="text-xs text-gray-400 mt-0.5">تابع كل بيانات العملاء بسهولة</p>
+        </div>
+        {canExport && (
+          <button
+            type="button"
+            onClick={handleExportClients}
+            disabled={loading || !filteredClients.length}
+            className="shrink-0 px-4 py-2 bg-[#c9a84c] hover:bg-[#b8973d] rounded-xl text-sm font-bold text-white disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            تصدير
+          </button>
+        )}
       </div>
 
       {/* Banner */}
@@ -700,6 +747,7 @@ export default function ClientsPage() {
 
             {/* Actions — من اليمين لليسار */}
             <div className="flex items-center gap-2 justify-start">
+              {canView && (
               <button 
                 onClick={() => handleOpenDetails(client)}
                 className="flex-1 flex items-center justify-center gap-1.5 border border-gray-200 text-gray-600 text-sm py-2 rounded-lg hover:bg-gray-50 transition-colors"
@@ -711,6 +759,7 @@ export default function ClientsPage() {
                 </svg>
                 عرض التفاصيل
               </button>
+              )}
               {canEdit && (
                 <button 
                   onClick={() => handleOpenEdit(client)}

@@ -6,8 +6,7 @@ import {
   fetchUserProfile,
   saleToProfile,
 } from "../services/authService.js";
-import { fetchRolePermissionLinksByRoleId } from "../services/permissionService.js";
-import { apiPermissionsToInternalKeys } from "../lib/apiPermissionBridge.js";
+import { loadRolePermissionKeys } from "../services/permissionService.js";
 import { fetchRoles, isProtectedRole } from "../services/roleService.js";
 import { ROLES, ROLE_LABELS } from "../lib/roles.js";
 import { resolvePermissions, createRoleAccess } from "../lib/roleAccess.js";
@@ -40,12 +39,10 @@ function mapUser(profile, access, roleLabel) {
 
 async function loadRolePermissions(roleId, roleName) {
   if (isProtectedRole({ id: roleId, name: roleName })) return ["*"];
-  if (roleId == null || roleId === "") return null;
+  if (roleId == null || roleId === "") return [];
 
   try {
-    const links = await fetchRolePermissionLinksByRoleId(roleId);
-    const permObjects = links.map((l) => l.permission).filter(Boolean);
-    return apiPermissionsToInternalKeys(permObjects);
+    return await loadRolePermissionKeys(roleId);
   } catch (err) {
     console.warn("[auth] load role permissions:", err);
     return [];
@@ -112,6 +109,13 @@ export function AuthProvider({ children }) {
     [applyProfile]
   );
 
+  const completeLogin = useCallback(
+    async (sale) => {
+      await applyProfile(saleToProfile(sale));
+    },
+    [applyProfile]
+  );
+
   const logout = useCallback(async () => {
     await authLogout();
     setProfile(null);
@@ -126,6 +130,14 @@ export function AuthProvider({ children }) {
     if (p) await applyProfile(p);
     return p;
   }, [applyProfile]);
+
+  /** إعادة تحميل صلاحيات الدور الحالي من الـ API (بعد تعديل الصلاحيات) */
+  const refreshPermissions = useCallback(async () => {
+    if (!profile?.role_id) return;
+    const label = roleLabel || (await resolveRoleLabel(profile.role_id));
+    const perms = await loadRolePermissions(profile.role_id, label);
+    setRolePermissions(perms);
+  }, [profile?.role_id, roleLabel]);
 
   const permissions = useMemo(
     () => resolvePermissions(effectiveRole, rolePermissions, profile?.permissions),
@@ -153,9 +165,11 @@ export function AuthProvider({ children }) {
     isLoaded,
     isSignedIn,
     login,
+    completeLogin,
     logout,
     signOut: logout,
     refreshUser,
+    refreshPermissions,
     firebaseUser: null,
   };
 

@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback } from "react";
 import { useAuthContext } from "../lib/AuthContext";
 import { useGlobalSearch } from "../hooks/useGlobalSearch";
+import { usePermissions } from "../hooks/usePermissions.js";
+import { PERMISSIONS } from "../lib/permissions.js";
 import { fetchSalesList } from "../services/salesService.js";
 
 const BASE = "https://drivo1.elmoroj.com/api";
@@ -71,18 +73,18 @@ function buildUrl(role, userId) {
 
 export default function ActivityLogPage() {
   const { user } = useAuthContext();
+  const { can } = usePermissions();
+  const canAdminTab = can(PERMISSIONS.ACTIVITY_ADMIN);
+  const canSalesTab = can(PERMISSIONS.ACTIVITY_SALES);
+  const canDriverTab = can(PERMISSIONS.ACTIVITY_DRIVER);
+  const canSwitchTabs = canAdminTab || canSalesTab || canDriverTab;
 
-  // Determine current user's role from Firebase custom claims
-  const currentRole = user?.role ?? "admin";
   const currentUserId = user?.uid ?? "";
 
-  // If admin → can switch between all tabs; otherwise locked to own role
-  const isAdmin = currentRole === "admin";
-
-  // Active tab: admin can pick any, others are locked to their own role
   const [activeTab, setActiveTab] = useState(() => {
-    if (currentRole === "sales")  return "sales";
-    if (currentRole === "driver") return "driver";
+    if (canAdminTab) return "admin";
+    if (canSalesTab) return "sales";
+    if (canDriverTab) return "driver";
     return "admin";
   });
 
@@ -105,15 +107,14 @@ export default function ActivityLogPage() {
 
   const fetchLogs = useCallback(async () => {
     // For admin sales tab: require a selected sales id
-    if (activeTab === "sales" && isAdmin && !selectedSalesId) return;
-    // For admin driver tab: require a selected driver id
-    if (activeTab === "driver" && isAdmin && !selectedDriverId) return;
+    if (activeTab === "sales" && canSwitchTabs && !selectedSalesId) return;
+    if (activeTab === "driver" && canSwitchTabs && !selectedDriverId) return;
 
     setLoading(true);
     setError("");
     setLogs([]);
     try {
-      const userId = isAdmin
+      const userId = canSwitchTabs
         ? (activeTab === "sales" ? selectedSalesId : activeTab === "driver" ? selectedDriverId : "")
         : currentUserId;
       const url = buildUrl(activeTab, userId);
@@ -127,7 +128,7 @@ export default function ActivityLogPage() {
     } finally {
       setLoading(false);
     }
-  }, [activeTab, isAdmin, currentUserId, selectedSalesId, selectedDriverId]);
+  }, [activeTab, canSwitchTabs, currentUserId, selectedSalesId, selectedDriverId]);
 
   useEffect(() => {
     fetchLogs();
@@ -135,28 +136,35 @@ export default function ActivityLogPage() {
 
   // Load BOTH lists on mount so name resolution works everywhere
   useEffect(() => {
-    if (!isAdmin) return;
+    if (!canSwitchTabs) return;
     fetchAllSales()
       .then((list) => setSalesList(list))
       .catch((err) => console.error("fetchAllSales error:", err));
     fetchAllDrivers()
       .then((list) => setDriversList(list))
       .catch((err) => console.error("fetchAllDrivers error:", err));
-  }, [isAdmin]);
+  }, [canSwitchTabs]);
 
   // Load sales list when admin switches to sales tab (pre-select first item)
   useEffect(() => {
-    if (activeTab === "sales" && isAdmin && salesList.length > 0 && !selectedSalesId) {
+    if (activeTab === "sales" && canSwitchTabs && salesList.length > 0 && !selectedSalesId) {
       setSelectedSalesId(salesList[0].id);
     }
-  }, [activeTab, isAdmin, salesList, selectedSalesId]);
+  }, [activeTab, canSwitchTabs, salesList, selectedSalesId]);
 
   // Load drivers list when admin switches to driver tab (pre-select first item)
   useEffect(() => {
-    if (activeTab === "driver" && isAdmin && driversList.length > 0 && !selectedDriverId) {
+    if (activeTab === "driver" && canSwitchTabs && driversList.length > 0 && !selectedDriverId) {
       setSelectedDriverId(driversList[0].id);
     }
-  }, [activeTab, isAdmin, driversList, selectedDriverId]);
+  }, [activeTab, canSwitchTabs, driversList, selectedDriverId]);
+
+  const visibleRoleTabs = ROLE_TABS.filter((tab) => {
+    if (tab.key === "admin") return canAdminTab;
+    if (tab.key === "sales") return canSalesTab;
+    if (tab.key === "driver") return canDriverTab;
+    return false;
+  });
 
   // Reset filters on tab change
   useEffect(() => {
@@ -203,9 +211,9 @@ export default function ActivityLogPage() {
       <div className="bg-white rounded-2xl shadow-sm p-5 space-y-4">
 
         {/* Role Tabs — only admin sees all tabs */}
-        {isAdmin && (
+        {visibleRoleTabs.length > 1 && (
           <div className="flex gap-2 bg-gray-50 rounded-xl p-1">
-            {ROLE_TABS.map((tab) => (
+            {visibleRoleTabs.map((tab) => (
               <button
                 key={tab.key}
                 onClick={() => setActiveTab(tab.key)}
@@ -222,16 +230,15 @@ export default function ActivityLogPage() {
         )}
 
         {/* Current tab badge (non-admin) */}
-        {!isAdmin && (
+        {visibleRoleTabs.length <= 1 && (
           <div className="flex justify-end">
-            <span className={`text-xs font-medium px-3 py-1 rounded-full ${ROLE_CONFIG[currentRole]?.color ?? "bg-gray-100 text-gray-500"}`}>
-              {ROLE_CONFIG[currentRole]?.label ?? currentRole}
+            <span className={`text-xs font-medium px-3 py-1 rounded-full ${ROLE_CONFIG[activeTab]?.color ?? "bg-gray-100 text-gray-500"}`}>
+              {ROLE_CONFIG[activeTab]?.label ?? activeTab}
             </span>
           </div>
         )}
 
-        {/* Sales selector — admin sales tab only */}
-        {isAdmin && activeTab === "sales" && (
+        {canSalesTab && activeTab === "sales" && canSwitchTabs && (
           <div className="flex flex-col gap-1">
             <label className="text-xs text-gray-500 text-right">اختر السيلز</label>
             <select
@@ -250,7 +257,7 @@ export default function ActivityLogPage() {
         )}
 
         {/* Driver selector — admin driver tab only */}
-        {isAdmin && activeTab === "driver" && (
+        {canDriverTab && activeTab === "driver" && canSwitchTabs && (
           <div className="flex flex-col gap-1">
             <label className="text-xs text-gray-500 text-right">اختر السائق</label>
             <select
@@ -314,11 +321,11 @@ export default function ActivityLogPage() {
         </div>
 
         {/* Content */}
-        {isAdmin && activeTab === "sales" && !selectedSalesId ? (
+        {canSwitchTabs && activeTab === "sales" && !selectedSalesId ? (
           <div className="text-center py-12 text-gray-400 text-sm">
             اختر سيلز من القائمة أعلاه لعرض سجل نشاطاته
           </div>
-        ) : isAdmin && activeTab === "driver" && !selectedDriverId ? (
+        ) : canSwitchTabs && activeTab === "driver" && !selectedDriverId ? (
           <div className="text-center py-12 text-gray-400 text-sm">
             اختر سائق من القائمة أعلاه لعرض سجل نشاطاته
           </div>

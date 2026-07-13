@@ -31,6 +31,7 @@ export default function AppModal({
   isSubmitting = false,
   size = "md",
   closeOnBackdrop,
+  zIndex = 9999,
   children,
   footer,
 }) {
@@ -87,7 +88,7 @@ export default function AppModal({
   if (!isOpen) return null;
 
   return createPortal(
-    <div className="fixed inset-0 z-[9999] font-sans" dir="rtl">
+    <div className="fixed inset-0 font-sans" style={{ zIndex }} dir="rtl">
       {/* طبقة سوداء ناعمة — focus على النافذة بدون إرهاق بصري */}
       <div
         className="absolute inset-0 bg-black/30 backdrop-blur-[2px] animate-modal-backdrop"

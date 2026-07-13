@@ -64,7 +64,7 @@ export default function App() {
           <Route path="/approvals" element={<AdminPage><ApprovalsPage /></AdminPage>} />
           <Route path="/permissions" element={<AdminPage><PermissionsPage /></AdminPage>} />
           <Route path="/system" element={<AdminPage><SystemManagementPage /></AdminPage>} />
-          <Route path="/accounts" element={<Navigate to="/accounts/employees" replace />} />
+          <Route path="/accounts" element={<Navigate to="/accounts/payments" replace />} />
           <Route path="/accounts/:tab" element={<AdminPage><AccountsPage /></AdminPage>} />
           <Route path="/settings" element={<AdminPage><SettingsPage /></AdminPage>} />
           <Route path="/rewards" element={<AdminPage><RewardsPage /></AdminPage>} />

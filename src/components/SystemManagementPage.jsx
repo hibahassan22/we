@@ -1,5 +1,14 @@
 import { useState, useEffect, useCallback } from "react";
 import AppModal from "./ui/AppModal";
+import { usePermissions } from "../hooks/usePermissions.js";
+import { PERMISSIONS } from "../lib/permissions.js";
+import {
+  fetchBanks,
+  createBank,
+  updateBank,
+  deleteBank,
+  buildBankPayload,
+} from "../services/bankService.js";
 
 const BASE = "https://drivo1.elmoroj.com/api";
 
@@ -9,6 +18,11 @@ const EMPTY_EXPENSE = {
   amount_egp: "",
   expense_date: "",
   description: "",
+};
+
+const EMPTY_BANK = {
+  name: "",
+  bank_number: "",
 };
 
 const TARGETS_INIT = [
@@ -129,6 +143,42 @@ function buildExpensePayload(form) {
   };
 }
 
+function BankFormFields({ form, setForm, disabled }) {
+  return (
+    <>
+      <div className="space-y-1">
+        <label className="text-xs text-gray-500 text-right block">اسم البنك</label>
+        <input
+          value={form.name}
+          onChange={(e) => setForm((p) => ({ ...p, name: e.target.value }))}
+          placeholder="مثال: الراجحي"
+          className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400 text-right placeholder-gray-300"
+          dir="rtl"
+          disabled={disabled}
+        />
+      </div>
+      <div className="space-y-1">
+        <label className="text-xs text-gray-500 text-right block">رقم البنك</label>
+        <input
+          value={form.bank_number}
+          onChange={(e) => setForm((p) => ({ ...p, bank_number: e.target.value }))}
+          placeholder="مثال: 1234567890"
+          className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400 text-left placeholder-gray-300"
+          dir="ltr"
+          disabled={disabled}
+        />
+      </div>
+    </>
+  );
+}
+
+function bankToForm(item) {
+  return {
+    name: item?.name ?? "",
+    bank_number: item?.bank_number ?? "",
+  };
+}
+
 // ======= Shared delete button =======
 function DeleteBtn({ onClick }) {
   return (
@@ -160,6 +210,8 @@ function EditBtn({ onClick }) {
 
 // ======= Tab: أنواع المصروفات =======
 function ExpenseTypesTab() {
+  const { can } = usePermissions();
+  const canMutate = can(PERMISSIONS.SYSTEM_EDIT);
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -291,6 +343,7 @@ function ExpenseTypesTab() {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
+        {canMutate && (
         <button
           onClick={() => { setForm(EMPTY_EXPENSE); setShowModal(true); }}
           className="flex items-center gap-1.5 bg-[#c9a84c] hover:bg-[#b8973d] text-white text-xs font-medium px-3 py-2 rounded-xl transition-colors"
@@ -300,6 +353,7 @@ function ExpenseTypesTab() {
           </svg>
           إضافة
         </button>
+        )}
         <h3 className="text-sm font-semibold text-gray-700">أنواع المصروفات</h3>
       </div>
 
@@ -335,8 +389,8 @@ function ExpenseTypesTab() {
                 )}
               </div>
               <div className="flex items-center gap-2 shrink-0">
-                <DeleteBtn onClick={() => setDeletingItem(item)} />
-                <EditBtn onClick={() => handleEditClick(item)} />
+                {canMutate && <DeleteBtn onClick={() => setDeletingItem(item)} />}
+                {canMutate && <EditBtn onClick={() => handleEditClick(item)} />}
               </div>
             </div>
           ))}
@@ -429,8 +483,226 @@ function ExpenseTypesTab() {
   );
 }
 
+// ======= Tab: البنوك =======
+function BanksTab() {
+  const { can } = usePermissions();
+  const canMutate = can(PERMISSIONS.SYSTEM_EDIT);
+  const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [showModal, setShowModal] = useState(false);
+  const [form, setForm] = useState(EMPTY_BANK);
+  const [editingItem, setEditingItem] = useState(null);
+  const [editForm, setEditForm] = useState(EMPTY_BANK);
+  const [deletingItem, setDeletingItem] = useState(null);
+  const [actionLoading, setActionLoading] = useState(false);
+
+  const loadBanks = useCallback(async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const list = await fetchBanks();
+      setItems(list);
+    } catch (err) {
+      console.error("loadBanks error:", err);
+      setError("حدث خطأ أثناء تحميل البنوك. يرجى التحقق من اتصال الشبكة.");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadBanks();
+  }, [loadBanks]);
+
+  const handleAdd = async () => {
+    if (!form.name.trim() || !form.bank_number.trim()) return;
+    setActionLoading(true);
+    try {
+      await createBank(buildBankPayload(form));
+      setForm(EMPTY_BANK);
+      setShowModal(false);
+      loadBanks();
+    } catch (err) {
+      console.error("handleAdd bank error:", err);
+      alert(err.message || "حدث خطأ أثناء إضافة البنك");
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleEditClick = (item) => {
+    setEditingItem(item);
+    setEditForm(bankToForm(item));
+  };
+
+  const handleEdit = async () => {
+    if (!editingItem || !editForm.name.trim() || !editForm.bank_number.trim()) return;
+    setActionLoading(true);
+    try {
+      await updateBank(editingItem.id, buildBankPayload(editForm));
+      setEditingItem(null);
+      setEditForm(EMPTY_BANK);
+      loadBanks();
+    } catch (err) {
+      console.error("handleEdit bank error:", err);
+      alert(err.message || "حدث خطأ أثناء تعديل البنك");
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleDelete = async () => {
+    if (!deletingItem) return;
+    setActionLoading(true);
+    try {
+      await deleteBank(deletingItem.id);
+      setDeletingItem(null);
+      loadBanks();
+    } catch (err) {
+      console.error("handleDelete bank error:", err);
+      alert(err.message || "حدث خطأ أثناء حذف البنك");
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const canSubmitForm = (f) => f.name.trim() && f.bank_number.trim();
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        {canMutate && (
+          <button
+            onClick={() => { setForm(EMPTY_BANK); setShowModal(true); }}
+            className="flex items-center gap-1.5 bg-[#c9a84c] hover:bg-[#b8973d] text-white text-xs font-medium px-3 py-2 rounded-xl transition-colors"
+          >
+            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 4v16m8-8H4" />
+            </svg>
+            إضافة
+          </button>
+        )}
+        <h3 className="text-sm font-semibold text-gray-700">البنوك</h3>
+      </div>
+
+      {loading ? (
+        <div className="flex justify-center items-center py-20">
+          <div className="w-10 h-10 border-4 border-[#c9a84c] border-t-transparent rounded-full animate-spin" />
+        </div>
+      ) : error ? (
+        <div className="text-center py-10 space-y-3 bg-[#faf7f0] rounded-xl border border-gray-100">
+          <p className="text-sm text-red-500">{error}</p>
+          <button
+            onClick={loadBanks}
+            className="px-4 py-2 bg-[#c9a84c] hover:bg-[#b8973d] text-white text-xs font-medium rounded-xl transition-colors"
+          >
+            إعادة المحاولة
+          </button>
+        </div>
+      ) : items.length === 0 ? (
+        <div className="text-center py-10 bg-[#faf7f0] rounded-xl border border-gray-100">
+          <p className="text-sm text-gray-400">لا توجد بنوك مضافة حالياً.</p>
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {items.map((item) => (
+            <div key={item.id} className="flex items-center justify-between bg-[#faf7f0] border border-gray-100 rounded-xl px-4 py-3">
+              <div className="text-right space-y-0.5 min-w-0">
+                <p className="text-sm font-semibold text-gray-800">{item.name}</p>
+                <p className="text-xs text-gray-500" dir="ltr">{item.bank_number}</p>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                {canMutate && <DeleteBtn onClick={() => setDeletingItem(item)} />}
+                {canMutate && <EditBtn onClick={() => handleEditClick(item)} />}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {showModal && (
+        <Modal title="إضافة بنك جديد" onClose={() => { setShowModal(false); setForm(EMPTY_BANK); }}>
+          <BankFormFields form={form} setForm={setForm} disabled={actionLoading} />
+          <div className="flex items-center justify-end gap-3 pt-1">
+            <button
+              disabled={actionLoading}
+              onClick={() => { setShowModal(false); setForm(EMPTY_BANK); }}
+              className="px-5 py-2 border border-[#c9a84c] text-[#c9a84c] text-sm font-medium rounded-xl hover:bg-amber-50 transition-colors"
+            >
+              إلغاء
+            </button>
+            <button
+              disabled={actionLoading || !canSubmitForm(form)}
+              onClick={handleAdd}
+              className="px-5 py-2 bg-[#c9a84c] hover:bg-[#b8973d] text-white text-sm font-medium rounded-xl transition-colors disabled:opacity-50"
+            >
+              {actionLoading ? "جارٍ الإضافة..." : "إضافة"}
+            </button>
+          </div>
+        </Modal>
+      )}
+
+      {editingItem && (
+        <Modal title="تعديل البنك" onClose={() => { setEditingItem(null); setEditForm(EMPTY_BANK); }}>
+          <BankFormFields form={editForm} setForm={setEditForm} disabled={actionLoading} />
+          <div className="flex items-center justify-end gap-3 pt-1">
+            <button
+              disabled={actionLoading}
+              onClick={() => { setEditingItem(null); setEditForm(EMPTY_BANK); }}
+              className="px-5 py-2 border border-[#c9a84c] text-[#c9a84c] text-sm font-medium rounded-xl hover:bg-amber-50 transition-colors"
+            >
+              إلغاء
+            </button>
+            <button
+              disabled={actionLoading || !canSubmitForm(editForm)}
+              onClick={handleEdit}
+              className="px-5 py-2 bg-[#c9a84c] hover:bg-[#b8973d] text-white text-sm font-medium rounded-xl transition-colors disabled:opacity-50"
+            >
+              {actionLoading ? "جارٍ التعديل..." : "تعديل"}
+            </button>
+          </div>
+        </Modal>
+      )}
+
+      {deletingItem && (
+        <Modal title="تأكيد الحذف" onClose={() => setDeletingItem(null)}>
+          <div className="text-center space-y-4">
+            <div className="w-12 h-12 bg-red-50 text-red-500 rounded-full flex items-center justify-center mx-auto">
+              <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+              </svg>
+            </div>
+            <p className="text-sm text-gray-500">
+              هل أنت متأكد أنك تريد حذف بنك <span className="font-bold text-gray-800">{deletingItem.name}</span>؟
+            </p>
+            <div className="flex gap-3 pt-2">
+              <button
+                disabled={actionLoading}
+                onClick={() => setDeletingItem(null)}
+                className="w-full bg-gray-100 text-gray-700 font-medium py-2 rounded-xl text-sm hover:bg-gray-200 transition-colors"
+              >
+                إلغاء
+              </button>
+              <button
+                disabled={actionLoading}
+                onClick={handleDelete}
+                className="w-full bg-red-500 text-white font-medium py-2 rounded-xl text-sm hover:bg-red-600 transition-colors disabled:opacity-50"
+              >
+                {actionLoading ? "جارٍ الحذف..." : "حذف"}
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
 // ======= Tab: التارجت =======
 function TargetsTab() {
+  const { can } = usePermissions();
+  const canMutate = can(PERMISSIONS.SYSTEM_EDIT);
   const [items, setItems] = useState(TARGETS_INIT);
   const [showModal, setShowModal] = useState(false);
   const [form, setForm] = useState({ from: "", to: "", pct: "", label: "", color: "green" });
@@ -451,6 +723,7 @@ function TargetsTab() {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
+        {canMutate && (
         <button
           onClick={() => setShowModal(true)}
           className="flex items-center gap-1.5 bg-[#c9a84c] hover:bg-[#b8973d] text-white text-xs font-medium px-3 py-2 rounded-xl transition-colors"
@@ -460,6 +733,7 @@ function TargetsTab() {
           </svg>
           إضافة
         </button>
+        )}
         <h3 className="text-sm font-semibold text-gray-700">قواعد التارجت</h3>
       </div>
 
@@ -468,7 +742,7 @@ function TargetsTab() {
           const badgeCls = labelColorMap[item.color]?.badge || "bg-gray-200 text-gray-600";
           return (
             <div key={item.id} className="flex items-center justify-between bg-[#faf7f0] border border-gray-100 rounded-xl px-4 py-3">
-              <DeleteBtn onClick={() => setItems((p) => p.filter((x) => x.id !== item.id))} />
+              {canMutate && <DeleteBtn onClick={() => setItems((p) => p.filter((x) => x.id !== item.id))} />}
               <div className="flex items-center gap-3">
                 <div className="text-right">
                   <p className="text-xs text-gray-400">
@@ -589,6 +863,8 @@ function TargetsTab() {
 
 // ======= Tab: المدن =======
 function CitiesTab() {
+  const { can } = usePermissions();
+  const canMutate = can(PERMISSIONS.SYSTEM_EDIT);
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -705,6 +981,7 @@ function CitiesTab() {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
+        {canMutate && (
         <button
           onClick={() => setShowModal(true)}
           className="flex items-center gap-1.5 bg-[#c9a84c] hover:bg-[#b8973d] text-white text-xs font-medium px-3 py-2 rounded-xl transition-colors"
@@ -714,6 +991,7 @@ function CitiesTab() {
           </svg>
           إضافة
         </button>
+        )}
         <h3 className="text-sm font-semibold text-gray-700">المدن</h3>
       </div>
 
@@ -741,8 +1019,8 @@ function CitiesTab() {
             <div key={city.id} className="flex items-center justify-between bg-[#faf7f0] border border-gray-100 rounded-xl px-4 py-3">
               <span className="text-sm text-gray-700 font-medium">{city.name}</span>
               <div className="flex items-center gap-2">
-                <DeleteBtn onClick={() => setDeletingCity(city)} />
-                <EditBtn onClick={() => handleEditClick(city)} />
+                {canMutate && <DeleteBtn onClick={() => setDeletingCity(city)} />}
+                {canMutate && <EditBtn onClick={() => handleEditClick(city)} />}
               </div>
             </div>
           ))}
@@ -850,10 +1128,25 @@ function CitiesTab() {
 }
 
 // ======= Main Page =======
-const TABS = ["التارجت", "انواع المصروفات", "المدن"];
+const TABS = ["التارجت", "انواع المصروفات", "البنوك", "المدن"];
 
 export default function SystemManagementPage() {
+  const { can } = usePermissions();
+  const canSystemRead = can(PERMISSIONS.SYSTEM_READ);
+  const canSystemEdit = can(PERMISSIONS.SYSTEM_EDIT);
+  const canCities = canSystemRead || canSystemEdit;
+  const canExpenses = canSystemRead || canSystemEdit;
+  const canBanks = canSystemRead || canSystemEdit;
+  const canTargets = canSystemEdit;
   const [activeTab, setActiveTab] = useState("التارجت");
+
+  const visibleTabs = TABS.filter((tab) => {
+    if (tab === "المدن") return canCities;
+    if (tab === "انواع المصروفات") return canExpenses;
+    if (tab === "البنوك") return canBanks;
+    if (tab === "التارجت") return canTargets;
+    return true;
+  });
 
   return (
     <div className="w-full min-h-0 space-y-5 pb-8" dir="rtl">
@@ -878,7 +1171,7 @@ export default function SystemManagementPage() {
 
         {/* Tab bar */}
         <div className="flex items-center gap-1 bg-gray-100 rounded-xl p-1">
-          {TABS.map((tab) => (
+          {visibleTabs.map((tab) => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
@@ -896,6 +1189,7 @@ export default function SystemManagementPage() {
         {/* Tab content */}
         {activeTab === "التارجت"          && <TargetsTab />}
         {activeTab === "انواع المصروفات" && <ExpenseTypesTab />}
+        {activeTab === "البنوك"            && <BanksTab />}
         {activeTab === "المدن"            && <CitiesTab />}
       </div>
     </div>

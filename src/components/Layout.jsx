@@ -1,16 +1,26 @@
-﻿import { useState, useEffect, useRef } from "react";
+﻿import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { createPortal } from "react-dom";
 import { useNavigate, useLocation } from "react-router-dom";
 import { useAuthContext } from "../context/AuthContext.jsx";
 import { usePermissions } from "../hooks/usePermissions.js";
 import { useUnreadCount } from "../lib/useUnreadCount";
-import { useChatUnreadCount, isChatDriverUnread, markChatDriverRead, syncChatUnreadFromDrivers } from "../lib/useChatUnread";
+import { useChatUnreadCount, isChatDriverUnread, markChatDriverRead } from "../lib/useChatUnread";
 import { subscribeNotifications, markAllAsRead, markAsRead, initNotificationsCollection, isNotificationUnread, syncBackendNotifications } from "../services/notifications";
+import {
+  fetchAllDrivers,
+  fetchDriverSaleChats,
+  fetchMessagesForDriver,
+  sendDriverSaleChatMessage,
+  getDriverChatUserId,
+  indexChatsByPartner,
+  mergeDriversWithChatPreviews,
+} from "../services/driverSaleChatService.js";
+import { formatChatTime, driverDisplayName } from "../services/tripChatService.js";
+import { useToast } from "../lib/toast.jsx";
 import PageTransition from "./PageTransition";
-import AppModal from "./ui/AppModal";
 import { useGlobalSearch, getSearchPlaceholder } from "../hooks/useGlobalSearch";
 import { assetUrl } from "../lib/assetUrl.js";
 
-const BASE = "https://drivo1.elmoroj.com/api";
 const fmtDate = (ts) => { if (!ts) return ""; const d = ts?.toDate ? ts.toDate() : new Date(ts); const diff = Math.floor((Date.now()-d)/1000); if (diff<60) return "منذ لحظات"; if (diff<3600) return "منذ "+Math.floor(diff/60)+"د"; if (diff<86400) return "منذ "+Math.floor(diff/3600)+"س"; return d.toLocaleDateString("ar-EG"); };
 
 const SearchIcon = () => (<svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>);
@@ -113,169 +123,337 @@ function NotificationsDropdown({ onClose }) {
 }
 
 function ChatModal({ isOpen, onClose, currentUser }) {
+  const toast = useToast();
+  const myId = currentUser?.uid ?? currentUser?.id ?? "";
   const [drivers, setDrivers] = useState([]);
   const [selected, setSelected] = useState(null);
-  const [prevSelected, setPrevSelected] = useState(null);
-  const [sliding, setSliding] = useState(false);
-  const [messages, setMessages] = useState({});
+  const [messages, setMessages] = useState([]);
   const [inputText, setInputText] = useState("");
   const [loading, setLoading] = useState(true);
+  const [messagesLoading, setMessagesLoading] = useState(false);
+  const [sending, setSending] = useState(false);
   const [search, setSearch] = useState("");
   const bottomRef = useRef(null);
-  const senderName = [currentUser?.firstName, currentUser?.lastName].filter(Boolean).join(" ") || "انت";
 
-  useEffect(() => {
-    if (!isOpen) return;
-    try {
-      const saved = localStorage.getItem("drivo_chat_messages");
-      if (saved) setMessages(JSON.parse(saved));
-    } catch { /* ignore */ }
-  }, [isOpen]);
+  const dName = (d) => driverDisplayName(d, d?.chatUserId);
+  const dInit = (d) => (d?.name?.[0] ?? "س").toUpperCase();
 
-  useEffect(() => {
-    if (!isOpen || !Object.keys(messages).length) return;
-    try {
-      localStorage.setItem("drivo_chat_messages", JSON.stringify(messages));
-    } catch { /* ignore */ }
-  }, [messages, isOpen]);
-
-  useEffect(() => {
-    if (!isOpen) return;
+  const loadDrivers = useCallback(async () => {
     setLoading(true);
-    fetch(BASE + "/drivers").then(r => r.json()).then(d => {
-      const list = Array.isArray(d) ? d : (d.data ?? d.drivers ?? []);
-      syncChatUnreadFromDrivers(list);
-      setDrivers(list.slice(0, 30));
-      setSelected(s => s ?? list[0] ?? null);
+    try {
+      const [driverList, chatList] = await Promise.all([
+        fetchAllDrivers().catch(() => []),
+        fetchDriverSaleChats().catch(() => []),
+      ]);
+      const chatByPartner = indexChatsByPartner(chatList, myId);
+      const merged = mergeDriversWithChatPreviews(driverList, chatByPartner);
+      setDrivers(merged);
+      setSelected((prev) => {
+        if (prev && merged.some((d) => d.chatUserId === prev.chatUserId)) {
+          return merged.find((d) => d.chatUserId === prev.chatUserId) ?? prev;
+        }
+        return merged[0] ?? null;
+      });
+    } catch (err) {
+      toast.error(err.message || "فشل تحميل السائقين");
+      setDrivers([]);
+    } finally {
       setLoading(false);
-    }).catch(() => setLoading(false));
-  }, [isOpen]);
+    }
+  }, [myId, toast]);
 
-  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior:"smooth" }); }, [messages, selected]);
+  const loadMessages = useCallback(async (driver) => {
+    if (!driver) {
+      setMessages([]);
+      return;
+    }
+    setMessagesLoading(true);
+    try {
+      const list = await fetchMessagesForDriver(driver, myId);
+      setMessages(list);
+    } catch (err) {
+      toast.error(err.message || "فشل تحميل المحادثة");
+      setMessages([]);
+    } finally {
+      setMessagesLoading(false);
+    }
+  }, [myId, toast]);
 
-  const send = () => {
-    if (!inputText.trim() || !selected) return;
-    const msg = { id:Date.now(), text:inputText.trim(), sender:"me", senderName, time:new Date().toLocaleTimeString("ar-EG",{hour:"2-digit",minute:"2-digit"}) };
-    setMessages(p => ({ ...p, [selected.id]:[...(p[selected.id]??[]),msg] }));
-    setInputText("");
+  useEffect(() => {
+    if (!isOpen) return;
+    loadDrivers();
+  }, [isOpen, loadDrivers]);
+
+  useEffect(() => {
+    if (!isOpen || !selected) return;
+    loadMessages(selected);
+    markChatDriverRead(selected.chatUserId);
+  }, [isOpen, selected, loadMessages]);
+
+  useEffect(() => {
+    if (!isOpen || !selected) return undefined;
+    const timer = setInterval(() => {
+      fetchMessagesForDriver(selected, myId)
+        .then(setMessages)
+        .catch(() => {});
+    }, 8000);
+    return () => clearInterval(timer);
+  }, [isOpen, selected, myId]);
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages, selected]);
+
+  useEffect(() => {
+    if (!isOpen) return undefined;
+    document.body.style.overflow = "hidden";
+    const onKey = (e) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => {
+      document.body.style.overflow = "";
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [isOpen, onClose]);
+
+  const send = async () => {
+    const text = inputText.trim();
+    if (!text || !selected || !myId) {
+      if (!myId) toast.error("يجب تسجيل الدخول لإرسال رسالة");
+      return;
+    }
+    const receiverId = selected.chatUserId || getDriverChatUserId(selected);
+    if (!receiverId) {
+      toast.error("تعذر تحديد السائق");
+      return;
+    }
+    setSending(true);
+    try {
+      await sendDriverSaleChatMessage({
+        senderId: myId,
+        receiverId,
+        message: text,
+      });
+      setInputText("");
+      const now = new Date();
+      const timeLabel = now.toLocaleTimeString("ar-EG", { hour: "2-digit", minute: "2-digit" });
+      setDrivers((prev) => prev.map((d) => (
+        d.chatUserId === selected.chatUserId
+          ? { ...d, lastMessage: text, lastMessageTime: timeLabel, lastMessageAt: now.getTime() }
+          : d
+      )));
+      await loadMessages(selected);
+    } catch (err) {
+      toast.error(err.message || "فشل إرسال الرسالة");
+    } finally {
+      setSending(false);
+    }
   };
 
-  const selectDriver = (d) => {
-    markChatDriverRead(d.id);
-    if (d.id === selected?.id) return;
-    setPrevSelected(selected);
-    setSliding(true);
-    setTimeout(() => {
-      setSelected(d);
-      setSliding(false);
-    }, 180);
+  const selectDriver = (driver) => {
+    markChatDriverRead(driver.chatUserId);
+    if (driver.chatUserId === selected?.chatUserId) return;
+    setSelected(driver);
   };
 
-  const dName = d => [d.name,d.last_name].filter(Boolean).join(" ") || ("سائق "+d.id);
-  const dInit = d => (d.name?.[0] ?? "س").toUpperCase();
-  const msgs = selected ? (messages[selected.id] ?? []) : [];
-  const filtered = drivers.filter(d => dName(d).includes(search));
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return drivers;
+    return drivers.filter((d) => {
+      const name = dName(d).toLowerCase();
+      const phone = String(d.phone ?? "");
+      const preview = String(d.lastMessage ?? "").toLowerCase();
+      return name.includes(q) || phone.includes(q) || preview.includes(q);
+    });
+  }, [drivers, search]);
 
-  return (
-    <AppModal isOpen={isOpen} onClose={onClose} title="المحادثات" size="xl">
-      <div className="relative w-full h-[520px] bg-white rounded-2xl overflow-hidden flex -mx-1" dir="rtl">
+  if (!isOpen) return null;
 
-        <div className="w-72 flex flex-col border-l border-amber-100 shrink-0 bg-[#faf7f0]">
-          <div className="px-4 py-4 bg-gradient-to-b from-[#9C6402] to-[#b8943f] rounded-tr-3xl">
-            <div className="flex items-center justify-between mb-3">
-              <button onClick={onClose} className="w-7 h-7 rounded-full bg-white/20 hover:bg-white/30 flex items-center justify-center text-white transition-colors">
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12"/></svg>
-              </button>
-              <h2 className="text-white font-bold text-sm">💬 المحادثات</h2>
-            </div>
-            <div className="flex items-center gap-2 bg-white/20 rounded-2xl px-3 py-2 border border-white/20">
-              <SearchIcon />
-              <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="ابحث عن سائق..." dir="rtl" className="flex-1 bg-transparent text-xs text-white outline-none placeholder-white/60" />
-            </div>
-          </div>
-          <div className="flex-1 overflow-y-auto">
-            {loading ? (
-              <div className="flex justify-center items-center h-16"><div className="w-6 h-6 border-2 border-[#c9a84c] border-t-transparent rounded-full animate-spin" /></div>
-            ) : filtered.map(d => {
-              const isActive = selected?.id === d.id;
-              const hasUnread = isChatDriverUnread(d.id);
-              return (
-                <button key={d.id} onClick={() => selectDriver(d)}
-                  className={"w-full flex items-center gap-3 px-4 py-3 border-b border-amber-50 transition-all text-right " + (isActive ? "bg-gradient-to-l from-[#c9a84c]/10 to-transparent border-r-[3px] border-r-[#c9a84c]" : "hover:bg-amber-50/50")}>
-                  <div className="relative shrink-0">
-                    <div className={"w-10 h-10 rounded-2xl flex items-center justify-center text-white font-bold text-sm " + (isActive ? "bg-gradient-to-br from-[#9C6402] to-[#E6C76A]" : "bg-gradient-to-br from-gray-300 to-gray-400")}>{dInit(d)}</div>
-                    <span className="absolute -bottom-0.5 -right-0.5 w-3 h-3 bg-green-400 border-2 border-white rounded-full" />
-                    {hasUnread && (
-                      <span className="absolute -top-0.5 -left-0.5 min-w-[16px] h-4 px-1 bg-red-500 text-white text-[9px] font-bold rounded-full flex items-center justify-center border border-white">1</span>
-                    )}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <p className={"text-xs truncate " + (isActive ? "font-bold text-[#9C6402]" : "font-medium text-gray-600")}>{dName(d)}</p>
-                    <p className="text-[10px] text-gray-400 truncate">{messages[d.id]?.at(-1)?.text ?? d.phone ?? ""}</p>
-                  </div>
+  return createPortal(
+    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 sm:p-6" dir="rtl">
+      <button
+        type="button"
+        aria-label="إغلاق"
+        className="absolute inset-0 bg-black/45 backdrop-blur-[2px]"
+        onClick={onClose}
+      />
+
+      <div
+        className="relative w-full max-w-[920px] h-[min(640px,calc(100vh-2rem))] bg-white rounded-3xl shadow-2xl overflow-hidden flex flex-col border border-white/20"
+        style={{ animation: "chatPopIn 0.22s ease" }}
+      >
+        <div className="flex flex-1 min-h-0">
+          {/* قائمة السائقين */}
+          <aside className="w-[300px] shrink-0 flex flex-col bg-[#faf7f0] border-l border-amber-100/80">
+            <div className="px-5 pt-5 pb-4 bg-gradient-to-b from-[#9C6402] to-[#b8943f]">
+              <div className="flex items-center justify-between mb-4">
+                <button
+                  type="button"
+                  onClick={onClose}
+                  className="w-8 h-8 rounded-full bg-white/15 hover:bg-white/25 flex items-center justify-center text-white transition-colors"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12"/></svg>
                 </button>
-              );
-            })}
-          </div>
-        </div>
-
-        <div className="flex-1 flex flex-col overflow-hidden">
-          {selected ? (<>
-            <div className="flex items-center justify-between px-5 py-3.5 bg-gradient-to-l from-[#9C6402] to-[#c9a84c] rounded-tl-3xl"
-              style={{
-                opacity: sliding ? 0 : 1,
-                transform: sliding ? "translateY(-6px)" : "translateY(0)",
-                transition: "opacity 0.18s ease, transform 0.18s ease"
-              }}>
-              <div className="flex items-center gap-3">
                 <div className="text-right">
-                  <p className="text-sm font-bold text-white">{dName(selected)}</p>
-                  <p className="text-[10px] text-white/70 flex items-center gap-1 justify-end"><span className="w-1.5 h-1.5 bg-green-300 rounded-full inline-block" />متصل الآن</p>
+                  <p className="text-white font-bold text-sm">المحادثات</p>
+                  <p className="text-white/70 text-[10px]">{drivers.length} سائق</p>
                 </div>
-                <div className="w-10 h-10 rounded-2xl bg-white/20 border border-white/30 flex items-center justify-center text-white font-bold text-sm">{dInit(selected)}</div>
+              </div>
+              <div className="flex items-center gap-2 bg-white/15 rounded-xl px-3 py-2.5 border border-white/20">
+                <SearchIcon />
+                <input
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder="ابحث عن سائق..."
+                  dir="rtl"
+                  className="flex-1 bg-transparent text-xs text-white outline-none placeholder-white/60"
+                />
               </div>
             </div>
-            <div className="flex-1 overflow-y-auto p-5 space-y-3 bg-[#f8f6f2]"
-              style={{
-                opacity: sliding ? 0 : 1,
-                transform: sliding ? "translateX(12px)" : "translateX(0)",
-                transition: "opacity 0.18s ease, transform 0.18s ease"
-              }}>
-              {msgs.length===0 ? (
-                <div className="flex flex-col items-center justify-center h-full gap-3 text-gray-400">
-                  <div className="w-16 h-16 rounded-full bg-gray-200 flex items-center justify-center text-3xl">💬</div>
-                  <p className="text-sm font-medium">ابدأ المحادثة مع {dName(selected)}</p>
+
+            <div className="flex-1 overflow-y-auto">
+              {loading ? (
+                <div className="flex justify-center py-12">
+                  <div className="w-7 h-7 border-2 border-[#c9a84c] border-t-transparent rounded-full animate-spin" />
                 </div>
-              ) : msgs.map(m => {
-                const isMe = m.sender === "me";
+              ) : filtered.length === 0 ? (
+                <p className="text-center text-gray-400 text-xs py-10">لا يوجد سائقين</p>
+              ) : filtered.map((d) => {
+                const isActive = selected?.chatUserId === d.chatUserId;
+                const hasUnread = isChatDriverUnread(d.chatUserId);
                 return (
-                  <div key={m.id} className={"flex flex-col gap-1 " + (isMe ? "items-end" : "items-start")}>
-                    <div className={"max-w-xs px-4 py-2.5 rounded-3xl text-sm shadow-sm " + (isMe ? "bg-gradient-to-br from-[#9C6402] to-[#c9a84c] text-white rounded-bl-md chat-bubble-me" : "bg-white text-gray-800 border border-amber-100 rounded-br-md chat-bubble-other")}>{m.text}</div>
-                    <span className="text-[9px] text-gray-400 px-1">{m.time}</span>
-                  </div>
+                  <button
+                    key={d.chatUserId || d.id}
+                    type="button"
+                    onClick={() => selectDriver(d)}
+                    className={`w-full flex items-center gap-3 px-4 py-3.5 border-b border-amber-50/80 transition-all text-right ${
+                      isActive
+                        ? "bg-white shadow-sm border-r-[3px] border-r-[#c9a84c]"
+                        : "hover:bg-white/60"
+                    }`}
+                  >
+                    <div className="relative shrink-0">
+                      <div className={`w-11 h-11 rounded-2xl flex items-center justify-center text-white font-bold text-sm shadow-sm ${
+                        isActive ? "bg-gradient-to-br from-[#9C6402] to-[#E6C76A]" : "bg-gradient-to-br from-gray-300 to-gray-400"
+                      }`}>
+                        {dInit(d)}
+                      </div>
+                      {hasUnread && (
+                        <span className="absolute -top-1 -left-1 min-w-[18px] h-[18px] px-1 bg-red-500 text-white text-[9px] font-bold rounded-full flex items-center justify-center border-2 border-white">
+                          1
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center justify-between gap-2 mb-0.5">
+                        <span className="text-[10px] text-gray-400 shrink-0">
+                          {d.lastMessageTime || (d.lastMessageAt ? formatChatTime(new Date(d.lastMessageAt).toISOString()) : "")}
+                        </span>
+                        <p className={`text-xs truncate ${isActive ? "font-bold text-[#9C6402]" : "font-semibold text-gray-700"}`}>
+                          {dName(d)}
+                        </p>
+                      </div>
+                      <p className="text-[11px] text-gray-400 truncate">
+                        {d.lastMessage || d.phone || "لا توجد رسائل بعد"}
+                      </p>
+                    </div>
+                  </button>
                 );
               })}
-              <div ref={bottomRef} />
             </div>
-            <div className="px-4 py-3 bg-white border-t border-amber-100">
-              <div className="flex items-center gap-3 bg-amber-50 rounded-2xl px-4 py-2.5 border border-amber-100">
-                <button onClick={send} className="w-8 h-8 rounded-xl bg-gradient-to-br from-[#9C6402] to-[#E6C76A] flex items-center justify-center text-white shrink-0 rotate-180 hover:opacity-90 transition-opacity"><SendIcon /></button>
-                <input value={inputText} onChange={e=>setInputText(e.target.value)} onKeyDown={e=>e.key==="Enter"&&send()} placeholder={"راسل "+dName(selected)+"..."} dir="rtl" className="flex-1 bg-transparent text-sm text-right outline-none placeholder-amber-400 text-gray-700" />
+          </aside>
+
+          {/* نافذة المحادثة */}
+          <section className="flex-1 flex flex-col min-w-0 bg-[#f8f6f2]">
+            {selected ? (
+              <>
+                <header className="px-6 py-4 bg-white border-b border-gray-100 flex items-center justify-between gap-3 shadow-sm">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div className="w-11 h-11 rounded-2xl bg-gradient-to-br from-[#9C6402] to-[#E6C76A] flex items-center justify-center text-white font-bold shadow-sm shrink-0">
+                      {dInit(selected)}
+                    </div>
+                    <div className="text-right min-w-0">
+                      <p className="text-sm font-bold text-gray-800 truncate">{dName(selected)}</p>
+                      <p className="text-[11px] text-gray-400 truncate" dir="ltr">{selected.phone || "—"}</p>
+                    </div>
+                  </div>
+                  <span className="text-[10px] text-emerald-600 bg-emerald-50 px-2.5 py-1 rounded-full font-medium shrink-0">
+                    محادثة مشتركة
+                  </span>
+                </header>
+
+                <div className="flex-1 overflow-y-auto px-6 py-5 space-y-3">
+                  {messagesLoading ? (
+                    <div className="flex justify-center py-16">
+                      <div className="w-8 h-8 border-2 border-[#c9a84c] border-t-transparent rounded-full animate-spin" />
+                    </div>
+                  ) : messages.length === 0 ? (
+                    <div className="flex flex-col items-center justify-center h-full min-h-[280px] gap-3 text-gray-400">
+                      <div className="w-16 h-16 rounded-full bg-white flex items-center justify-center text-3xl shadow-sm border border-gray-100">💬</div>
+                      <p className="text-sm font-medium text-gray-500">ابدأ المحادثة مع {dName(selected)}</p>
+                      <p className="text-[11px] text-gray-400">كل رسائل فريق المبيعات مع هذا السائق في مكان واحد</p>
+                    </div>
+                  ) : (
+                    messages.map((m) => {
+                      const isMe = String(m.sender_id) === String(myId);
+                      return (
+                        <div key={m.id} className={`flex flex-col gap-1 max-w-[78%] ${isMe ? "mr-auto items-end" : "ml-auto items-start"}`}>
+                          <div className={`px-4 py-2.5 rounded-2xl text-sm leading-relaxed shadow-sm ${
+                            isMe
+                              ? "bg-gradient-to-br from-[#9C6402] to-[#c9a84c] text-white rounded-bl-md"
+                              : "bg-white text-gray-800 border border-gray-100 rounded-br-md"
+                          }`}>
+                            {m.message}
+                          </div>
+                          <span className="text-[10px] text-gray-400 px-1">{formatChatTime(m.created_at)}</span>
+                        </div>
+                      );
+                    })
+                  )}
+                  <div ref={bottomRef} />
+                </div>
+
+                <footer className="px-5 py-4 bg-white border-t border-gray-100">
+                  <div className="flex items-center gap-3 bg-gray-50 rounded-2xl px-4 py-3 border border-gray-200 focus-within:border-[#c9a84c]/40 focus-within:ring-2 focus-within:ring-[#c9a84c]/10 transition-all">
+                    <input
+                      value={inputText}
+                      onChange={(e) => setInputText(e.target.value)}
+                      onKeyDown={(e) => e.key === "Enter" && !sending && send()}
+                      placeholder={`اكتب رسالة إلى ${dName(selected)}...`}
+                      dir="rtl"
+                      disabled={sending}
+                      className="flex-1 bg-transparent text-sm text-right outline-none text-gray-700 placeholder-gray-400 disabled:opacity-50"
+                    />
+                    <button
+                      type="button"
+                      onClick={send}
+                      disabled={sending || !inputText.trim()}
+                      className="w-10 h-10 rounded-xl bg-gradient-to-br from-[#9C6402] to-[#E6C76A] flex items-center justify-center text-white shrink-0 hover:opacity-90 transition-opacity disabled:opacity-40 shadow-sm"
+                    >
+                      {sending ? (
+                        <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                      ) : (
+                        <SendIcon />
+                      )}
+                    </button>
+                  </div>
+                </footer>
+              </>
+            ) : (
+              <div className="flex-1 flex flex-col items-center justify-center text-gray-400 gap-3">
+                <div className="text-5xl">💬</div>
+                <p className="text-sm font-medium text-gray-500">اختر سائقاً من القائمة</p>
               </div>
-            </div>
-          </>) : (
-            <div className="flex items-center justify-center h-full text-gray-400 flex-col gap-2"><div className="text-4xl">💬</div><p className="text-sm">اختر محادثة</p></div>
-          )}
+            )}
+          </section>
         </div>
       </div>
+
       <style>{`
+        @keyframes chatPopIn { from { opacity: 0; transform: scale(0.96) translateY(8px); } to { opacity: 1; transform: scale(1) translateY(0); } }
         @keyframes dropDown   { from{opacity:0;transform:translateY(-8px)} to{opacity:1;transform:translateY(0)} }
-        @keyframes slideInChat{ from{opacity:0;transform:translateX(10px)} to{opacity:1;transform:translateX(0)} }
-        @keyframes pageEnter  { from{opacity:0;transform:translateY(10px)} to{opacity:1;transform:translateY(0)} }
-        .chat-bubble-me   { animation: slideInChat 0.2s ease }
-        .chat-bubble-other{ animation: slideInChat 0.2s ease }
       `}</style>
-    </AppModal>
+    </div>,
+    document.body,
   );
 }
 

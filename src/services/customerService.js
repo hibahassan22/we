@@ -40,7 +40,7 @@ function mapApiNote(note) {
 export function mapCustomerRecord(item) {
   if (!item) return null;
   return {
-    id: item.id,
+    id: item.id != null ? String(item.id) : item.id,
     name: item.full_name || item.name || item.customer_name || "—",
     full_name: item.full_name || item.name || item.customer_name || "—",
     phone: item.phone || "",
@@ -48,6 +48,35 @@ export function mapCustomerRecord(item) {
     gender: item.gender || "",
     nationality: item.nationality || item.customer_nationality || "سعودي",
   };
+}
+
+/** يطابق راكب الرحلة بعميل من القائمة عبر الهاتف أو الاسم */
+export function findCustomerIdByPassenger(passenger, customers = []) {
+  if (!passenger || !customers.length) return null;
+
+  const phone = String(passenger.phone ?? "").replace(/\D/g, "");
+  if (phone) {
+    const byPhone = customers.find(
+      (c) => String(c.phone ?? "").replace(/\D/g, "") === phone
+    );
+    if (byPhone?.id != null) return String(byPhone.id);
+  }
+
+  const name = String(passenger.name ?? passenger.full_name ?? "").trim().toLowerCase();
+  if (name && name !== "—") {
+    const matches = customers.filter(
+      (c) => String(c.full_name ?? c.name ?? "").trim().toLowerCase() === name
+    );
+    if (matches.length === 1) return String(matches[0].id);
+  }
+
+  return null;
+}
+
+function mapApiErrorMessage(json, fallback) {
+  const msg = json?.message || json?.error || fallback;
+  if (/customer not found/i.test(msg)) return "العميل غير موجود في النظام";
+  return msg;
 }
 
 function normalizeCustomerList(json) {
@@ -65,12 +94,15 @@ function normalizeCustomerList(json) {
 
 /** GET /api/customers-details/{id} */
 export async function fetchCustomerDetails(customerId) {
-  const res = await fetch(`${API_BASE}/customers-details/${customerId}`, {
+  const id = String(customerId ?? "").trim();
+  if (!id) throw new Error("معرّف العميل غير صالح");
+
+  const res = await fetch(`${API_BASE}/customers-details/${encodeURIComponent(id)}`, {
     headers: { Accept: "application/json" },
   });
   const json = await res.json().catch(() => ({}));
   if (!res.ok) {
-    throw new Error(json?.message || json?.error || `فشل جلب بيانات العميل (${res.status})`);
+    throw new Error(mapApiErrorMessage(json, `فشل جلب بيانات العميل (${res.status})`));
   }
   const raw = json.customer ?? json;
   if (!raw) throw new Error("العميل غير موجود");
@@ -88,13 +120,14 @@ export async function fetchCustomerDetails(customerId) {
   customer.tripHistory = Array.isArray(raw.trips)
     ? raw.trips.map((t) => ({
         id: `#${t.id}`,
-        from: t.from || "—",
-        to: t.to || "—",
+        from: t.from ?? t.start_location ?? t.pickup ?? "—",
+        to: t.to ?? t.end_location ?? t.dropoff ?? "—",
         date: t.trip_date || t.start_date || "",
         status: TRIP_STATUS_LABELS[t.status] || t.status || "—",
         statusColor: TRIP_STATUS_COLORS[t.status] || "bg-gray-400",
         totalPrice: t.total_price,
         amountPaid: t.amount_paid,
+        tripType: t.trip_type,
       }))
     : [];
 

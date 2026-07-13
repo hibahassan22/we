@@ -48,8 +48,19 @@ export function extractTripPassengers(trip) {
   const add = (p, isMain = false) => {
     if (!p || typeof p !== "object") return;
 
-    const passengerId = p.id ?? p.passenger_id ?? null;
-    const customerId = p.customer_id ?? p.customer?.id ?? null;
+    let customerId = p.customer_id ?? p.customer?.id ?? null;
+    let passengerId = p.passenger_id ?? p.trip_passenger_id ?? null;
+    const rawId = p.id ?? null;
+
+    if (rawId != null) {
+      if (customerId != null && String(rawId) !== String(customerId)) {
+        passengerId = passengerId ?? rawId;
+      } else if (customerId == null) {
+        // id بدون customer_id = معرّف صف الراكب في الرحلة وليس العميل
+        passengerId = passengerId ?? rawId;
+      }
+    }
+
     const name = p.full_name ?? p.name ?? p.customer_name;
     const phone = p.phone ?? p.customer_phone ?? p.customer?.phone;
 
@@ -206,6 +217,10 @@ export async function addTripPayment(tripId, payment) {
   append("from_account", payment.from_account ?? payment.account_number);
   append("to_account", payment.to_account ?? payment.recipient_account);
   append("transfer_method", payment.transfer_method);
+  append("bank_name", payment.bank_name);
+  append("driver_id", payment.driver_id);
+  append("sender_driver_id", payment.sender_driver_id);
+  append("recipient_driver_id", payment.recipient_driver_id);
   append("notes", payment.notes ?? payment.payment_note);
   append("payment_date", payment.payment_date ?? payment.commission_transfer_date);
   if (payment.transfer_image) fd.append("transfer_image", payment.transfer_image);
@@ -581,27 +596,38 @@ export async function deleteTripWithoutDriver(tripId) {
 
 /** POST /api/trip/passenger/request-add */
 export async function requestAddPassenger(payload) {
+  const body = { ...payload };
+  if (body.customer_id != null && body.customer_id !== "") {
+    const cid = Number(body.customer_id);
+    if (Number.isNaN(cid) || cid <= 0) {
+      throw new Error("معرّف العميل غير صالح — اختر العميل من القائمة");
+    }
+    body.customer_id = cid;
+  }
+  if (body.gender === "ذكر") body.gender = "male";
+  if (body.gender === "أنثى") body.gender = "female";
+
   const res = await fetch(`${API_BASE}/trip/passenger/request-add`, {
     method: "POST",
     headers: { "Content-Type": "application/json", Accept: "application/json" },
-    body: JSON.stringify(payload),
+    body: JSON.stringify(body),
   });
   return parseJsonResponse(res);
 }
 
-/** POST /api/trip/passenger/request-delete */
+/** POST /api/trip/passenger/request-delete — يتطلب trip_id + customer_id */
 export async function requestDeletePassenger({ tripId, customerId, passengerId }) {
   const body = { trip_id: Number(tripId) };
 
-  if (customerId != null && customerId !== "") {
-    body.customer_id = Number(customerId);
-  }
-  if (passengerId != null && passengerId !== "") {
-    body.passenger_id = Number(passengerId);
+  const cid = customerId ?? null;
+  if (cid != null && cid !== "") {
+    body.customer_id = Number(cid);
+  } else if (passengerId != null && passengerId !== "") {
+    body.customer_id = Number(passengerId);
   }
 
-  if (body.customer_id == null && body.passenger_id == null) {
-    throw new Error("لا يمكن تحديد الراكب المراد حذفه");
+  if (body.customer_id == null || Number.isNaN(body.customer_id)) {
+    throw new Error("لا يمكن تحديد العميل المراد حذفه من الرحلة");
   }
 
   const res = await fetch(`${API_BASE}/trip/passenger/request-delete`, {

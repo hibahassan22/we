@@ -40,11 +40,33 @@ function normalizeRole(apiRole, permissionLinks = []) {
   };
 }
 
-export function isProtectedRole(role) {
+function normalizeRoleName(name) {
+  return String(name ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[أإآ]/g, "ا")
+    .replace(/ى/g, "ي")
+    .replace(/ة/g, "ه");
+}
+
+/** أدوار الأدمن — وصول كامل + إدارة صلاحيات الجميع */
+export function isAdminRole(role) {
   if (!role) return false;
-  const id = String(role.id ?? role).toLowerCase();
-  const name = String(role.name ?? role.role_name ?? "").trim();
-  return id === "admin" || name === "مدير النظام" || name.toLowerCase() === "admin";
+  const id = String(role.id ?? role.role_id ?? "").toLowerCase();
+  const name = normalizeRoleName(role.name ?? role.role_name ?? "");
+  if (id === "admin" || id === "1") return true;
+  if (name === "admin" || name === "administrator") return true;
+  if (name.includes("admin") || name.includes("ادمن") || name.includes("ادمين")) return true;
+  if (name.includes("مدير")) return true;
+  return false;
+}
+
+export function isProtectedRole(role) {
+  return isAdminRole(role);
+}
+
+export function findAdminRole(roles = []) {
+  return roles.find((r) => isAdminRole(r));
 }
 
 export async function fetchRoles() {

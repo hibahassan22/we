@@ -306,9 +306,12 @@ export default function SupportPage() {
   const { can } = usePermissions();
   const { user } = useAuth();
   const toast = useToast();
+  const canReadTickets = can(PERMISSIONS.SUPPORT_TICKETS_READ);
+  const canCreateTicket = can(PERMISSIONS.SUPPORT_TICKETS_CREATE);
   const canReply = can(PERMISSIONS.SUPPORT_TICKETS_REPLY);
+  const canUpdateTicket = can(PERMISSIONS.SUPPORT_TICKETS_CLOSE);
   const canDelete = can(PERMISSIONS.SUPPORT_TICKETS_DELETE);
-  const canEscalate = can(PERMISSIONS.SUPPORT_TICKETS_ESCALATE);
+  const canReadChats = can(PERMISSIONS.SUPPORT_TICKETS_REPLY);
   const myId = user?.uid ?? "";
 
   const driverMap = useMemo(() => {
@@ -492,11 +495,7 @@ export default function SupportPage() {
       <div className="flex items-center justify-between mb-3 bg-white px-4 py-3 rounded-xl border border-gray-200/60 shadow-sm">
         <h2 className="text-xl font-bold text-gray-800">الدعم الفني والتذاكر</h2>
         <div className="flex items-center gap-2">
-          <button className="border border-gray-200 bg-white text-gray-600 text-xs px-4 py-2 rounded-lg hover:bg-gray-50 flex items-center gap-1.5 shadow-sm">
-            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2a1 1 0 01-.293.707L13 13.414V19a1 1 0 01-.553.894l-4 2A1 1 0 017 21v-7.586L3.293 6.707A1 1 0 013 6V4z"/></svg>
-            تصفية
-          </button>
-          {canEscalate && (
+          {canCreateTicket && (
           <button onClick={()=>setTicketModal({open:true,ticket:null})} className="bg-[#4a4644] text-white text-xs px-4 py-2 rounded-lg hover:bg-black flex items-center gap-1.5 font-medium shadow-sm">
             <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4"/></svg>
             إنشاء تذكرة
@@ -507,8 +506,12 @@ export default function SupportPage() {
 
       {/* ── Row 2: tabs ── */}
       <div className="bg-white rounded-xl border border-gray-200/60 shadow-sm mb-5 p-1 flex">
+        {canReadChats && (
         <button onClick={()=>setActiveTab("live")} className={`flex-1 py-2.5 text-sm font-semibold rounded-lg transition-all ${activeTab==="live" ? "bg-gray-100 text-gray-800" : "text-gray-400 hover:text-gray-700"}`}>المحادثات المباشرة</button>
+        )}
+        {canReadTickets && (
         <button onClick={()=>setActiveTab("tickets")} className={`flex-1 py-2.5 text-sm font-semibold rounded-lg transition-all ${activeTab==="tickets" ? "bg-gray-100 text-gray-800" : "text-gray-400 hover:text-gray-700"}`}>التذاكر</button>
+        )}
       </div>
 
       {/* ── Tickets Tab ── */}
@@ -573,7 +576,7 @@ export default function SupportPage() {
                     حذف
                   </button>
                   )}
-                  {canReply && (
+                  {canUpdateTicket && (
                   <button onClick={()=>setTicketModal({open:true,ticket:t})} className="flex items-center gap-1 hover:text-amber-600 transition-colors">
                     <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
                     تعديل

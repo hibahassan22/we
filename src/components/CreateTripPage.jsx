@@ -84,6 +84,8 @@ export default function CreateTripPage() {
   const canEdit = can(PERMISSIONS.TRIPS_ADS_EDIT);
   const canDelete = can(PERMISSIONS.TRIPS_ADS_DELETE);
   const canPublish = can(PERMISSIONS.TRIPS_ADS_PUBLISH);
+  const canAssign = can(PERMISSIONS.TRIPS_OFFERED_ASSIGN);
+  const canChat = can(PERMISSIONS.TRIPS_OFFERED_CHAT);
 
   const filteredTrips = useMemo(
     () => filterByGlobalSearch(trips, searchQuery, (trip) => {
@@ -158,11 +160,7 @@ export default function CreateTripPage() {
   return (
     <div className="w-full space-y-4 p-4" dir="rtl">
 
-      <div className="bg-white rounded-xl px-5 py-3 border border-gray-200/60 shadow-sm flex items-center justify-between">
-        <button className="flex items-center gap-1.5 border border-gray-200 bg-white text-gray-600 text-xs px-3 py-2 rounded-lg hover:bg-gray-50 transition-colors">
-          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2a1 1 0 01-.293.707L13 13.414V19a1 1 0 01-.553.894l-4 2A1 1 0 017 21v-7.586L3.293 6.707A1 1 0 013 6V4z"/></svg>
-          تصفية
-        </button>
+      <div className="bg-white rounded-xl px-5 py-3 border border-gray-200/60 shadow-sm flex items-center justify-end">
         <div className="text-right">
           <h1 className="text-xl font-bold text-[#c9a84c]">قائمة الرحلات المعروضة</h1>
           <p className="text-xs text-gray-400">الرحلات للسائقين المسجلين بالتطبيق</p>
@@ -317,7 +315,7 @@ export default function CreateTripPage() {
               <div className="bg-gray-50/50 p-4 border-l border-gray-100 flex flex-col gap-2 justify-center w-full md:w-44 text-center">
                 <span className="text-xs font-semibold text-gray-400 mb-1 block">الإجراءات</span>
 
-                {canEdit && (
+                {canAssign && (
                   <button
                     type="button"
                     onClick={() => setAssignModal({ open: true, tripId: trip.id })}
@@ -349,6 +347,7 @@ export default function CreateTripPage() {
                   </button>
                 )}
 
+                {canChat && (
                 <button
                   type="button"
                   onClick={() => setChatModal({
@@ -360,6 +359,7 @@ export default function CreateTripPage() {
                 >
                   المحادثات
                 </button>
+                )}
 
                 {canDelete && (
                   <button

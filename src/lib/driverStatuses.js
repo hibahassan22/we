@@ -47,7 +47,17 @@ export async function fetchDriverStatuses() {
   });
   if (!res.ok) throw new Error(`فشل تحميل الحالات (${res.status})`);
   const data = await res.json();
-  return Array.isArray(data) && data.length ? data : FALLBACK_DRIVER_STATUSES;
+  if (Array.isArray(data) && data.length) return mergeStatusNames(data);
+  if (Array.isArray(data?.value) && data.value.length) return mergeStatusNames(data.value);
+  if (Array.isArray(data?.data) && data.data.length) return mergeStatusNames(data.data);
+  return FALLBACK_DRIVER_STATUSES;
+}
+
+function mergeStatusNames(list) {
+  return list.map((s) => {
+    const fb = FALLBACK_DRIVER_STATUSES.find((f) => Number(f.id) === Number(s.id));
+    return { ...s, name: fb?.name ?? s.name };
+  });
 }
 
 function normalizeStatusId(id) {

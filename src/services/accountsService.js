@@ -1,10 +1,23 @@
-const BASE = "https://drivo1.elmoroj.com/api";
+const API_BASE = "/api";
 
 async function getJson(url) {
   const res = await fetch(url, { headers: { Accept: "application/json" } });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  const data = await res.json();
-  return data;
+  return res.json();
+}
+
+/** GET /api/dashboard/monthly-report */
+export async function fetchMonthlyReport() {
+  const json = await getJson(`${API_BASE}/dashboard/monthly-report`);
+  const data = json?.data ?? json;
+  return {
+    totalIncome: Number(data.total_income ?? 0),
+    totalExpenses: Number(data.total_expenses_sar ?? 0),
+    totalRefunds: Number(data.total_refunds ?? 0),
+    netProfit: Number(data.net_profit ?? 0),
+    month: data.month,
+    year: data.year,
+  };
 }
 
 function asList(data) {
@@ -14,11 +27,11 @@ function asList(data) {
 
 export async function fetchAccountsSummary() {
   const [countsRes, expensesRes, refundsRes, salesRes, tripsRes] = await Promise.all([
-    getJson(`${BASE}/dashboard-counts`).catch(() => ({})),
-    getJson(`${BASE}/expenses`).catch(() => ({ data: [] })),
-    getJson(`${BASE}/all-refunds`).catch(() => ({ data: [] })),
-    getJson(`${BASE}/sales`).catch(() => []),
-    getJson(`${BASE}/trips`).catch(() => []),
+    getJson(`${API_BASE}/dashboard-counts`).catch(() => ({})),
+    getJson(`${API_BASE}/expenses`).catch(() => ({ data: [] })),
+    getJson(`${API_BASE}/all-refunds`).catch(() => ({ data: [] })),
+    getJson(`${API_BASE}/sales`).catch(() => []),
+    getJson(`${API_BASE}/trips`).catch(() => []),
   ]);
 
   const counts = countsRes?.data ?? countsRes ?? {};

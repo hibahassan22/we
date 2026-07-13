@@ -17,6 +17,28 @@ export async function fetchPaymentRequests({ status } = {}) {
   return parseList(await res.json());
 }
 
+/** GET /api/trip/payment-requests?status=approved — الدفعات المعتمدة للحسابات */
+export async function fetchApprovedPayments() {
+  return fetchPaymentRequests({ status: "approved" });
+}
+
+export function normalizeApprovedPayment(item) {
+  return {
+    id: item.id,
+    tripId: item.trip_id,
+    driverName: item.driver_id ?? item.driver_name ?? "—",
+    amount: Number(item.paid_amount ?? 0),
+    fromAccount: item.from_account ?? "",
+    toAccount: item.to_account ?? "",
+    transferMethod: item.transfer_method ?? "",
+    transferImage: item.transfer_image ?? null,
+    paymentDate: item.payment_date ?? "",
+    notes: item.notes ?? "",
+    status: item.status ?? "approved",
+    createdAt: item.created_at ?? "",
+  };
+}
+
 /** POST /api/trip/payment/approve/{id} */
 export async function approvePaymentRequest(id) {
   const res = await fetch(`${API_BASE}/trip/payment/approve/${id}`, {

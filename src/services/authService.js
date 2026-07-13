@@ -1,4 +1,5 @@
 import { STATUS_MESSAGES } from "../lib/authErrors.js";
+import { normalizePhoneForOtp } from "../lib/phoneValidation.js";
 
 const SESSION_KEY = "drivo_session";
 const API_BASE = "/api";
@@ -46,24 +47,19 @@ export function saleToProfile(sale) {
   };
 }
 
-/** POST /api/sales/login */
-export async function loginWithEmail(email, password) {
-  const res = await fetch(`${API_BASE}/sales/login`, {
-    method: "POST",
-    headers: { Accept: "application/json", "Content-Type": "application/json" },
-    body: JSON.stringify({
-      email: String(email).trim().toLowerCase(),
-      password: String(password),
-    }),
-  });
-
-  const text = await res.text();
+function parseJsonResponse(res, text) {
   let data = {};
   try {
     data = text ? JSON.parse(text) : {};
   } catch {
     data = { message: text };
   }
+  return data;
+}
+
+async function parseLoginResponse(res) {
+  const text = await res.text();
+  const data = parseJsonResponse(res, text);
 
   if (!res.ok) {
     throw new Error(data?.message || "البريد الإلكتروني أو كلمة المرور غير صحيحة");
@@ -79,8 +75,133 @@ export async function loginWithEmail(email, password) {
     throw new Error(STATUS_MESSAGES[status] ?? "حسابك غير مفعّل");
   }
 
+  return { sale, message: data?.message };
+}
+
+/** POST /api/sales/login — تحقق من البيانات بدون إنشاء جلسة */
+export async function verifyLoginCredentials(email, password) {
+  const res = await fetch(`${API_BASE}/sales/login`, {
+    method: "POST",
+    headers: { Accept: "application/json", "Content-Type": "application/json" },
+    body: JSON.stringify({
+      email: String(email).trim().toLowerCase(),
+      password: String(password),
+    }),
+  });
+  return parseLoginResponse(res);
+}
+
+/** POST /api/send-otp — إرسال رمز التحقق عبر واتساب */
+export async function sendLoginOtp(phone) {
+  const normalized = normalizePhoneForOtp(phone);
+  if (!normalized) throw new Error("رقم الهاتف غير صالح");
+
+  const res = await fetch(`${API_BASE}/send-otp`, {
+    method: "POST",
+    headers: { Accept: "application/json", "Content-Type": "application/json" },
+    body: JSON.stringify({ phone: normalized }),
+  });
+
+  const text = await res.text();
+  const data = parseJsonResponse(res, text);
+
+  if (!res.ok || data?.success === false) {
+    throw new Error(data?.message || "فشل إرسال رمز التحقق");
+  }
+
+  return { phone: normalized, message: data?.message };
+}
+
+/** POST /api/verify-otp — التحقق من رمز OTP */
+export async function verifyOtp(phone, otp) {
+  return verifyLoginOtp(phone, otp);
+}
+
+/** POST /api/send-otp — alias */
+export async function sendOtp(phone) {
+  return sendLoginOtp(phone);
+}
+
+/** إعادة تعيين كلمة المرور بعد التحقق من OTP */
+export async function resetPasswordWithOtp({ email, phone, otp, password }) {
+  const normalizedPhone = normalizePhoneForOtp(phone);
+  const code = String(otp ?? "").trim();
+  const pass = String(password ?? "");
+  const normalizedEmail = String(email ?? "").trim().toLowerCase();
+
+  if (!normalizedEmail) throw new Error("البريد الإلكتروني مطلوب");
+  if (!normalizedPhone) throw new Error("رقم الهاتف غير صالح");
+  if (!code) throw new Error("رمز التحقق مطلوب");
+  if (pass.length < 8) throw new Error("كلمة المرور يجب أن تكون 8 أحرف على الأقل");
+
+  const verified = await verifyLoginOtp(normalizedPhone, code);
+  const saleId =
+    verified?.sale?.id
+    ?? verified?.data?.sale?.id
+    ?? verified?.user?.id
+    ?? verified?.data?.id;
+
+  if (saleId) {
+    const res = await fetch(`${API_BASE}/sales/${encodeURIComponent(saleId)}`, {
+      method: "PUT",
+      headers: { Accept: "application/json", "Content-Type": "application/json" },
+      body: JSON.stringify({ password: pass, email: normalizedEmail }),
+    });
+    const text = await res.text();
+    const data = parseJsonResponse(res, text);
+    if (!res.ok) throw new Error(data?.message || "فشل تعيين كلمة المرور");
+    return data;
+  }
+
+  const res = await fetch(`${API_BASE}/sales/reset-password`, {
+    method: "POST",
+    headers: { Accept: "application/json", "Content-Type": "application/json" },
+    body: JSON.stringify({
+      email: normalizedEmail,
+      phone: normalizedPhone,
+      otp: code,
+      password: pass,
+    }),
+  });
+  const text = await res.text();
+  const data = parseJsonResponse(res, text);
+  if (!res.ok) throw new Error(data?.message || "فشل تعيين كلمة المرور");
+  return data;
+}
+
+/** POST /api/verify-otp — التحقق من رمز OTP */
+export async function verifyLoginOtp(phone, otp) {
+  const normalized = normalizePhoneForOtp(phone);
+  const code = String(otp ?? "").trim();
+  if (!normalized) throw new Error("رقم الهاتف غير صالح");
+  if (!code) throw new Error("يرجى إدخال رمز التحقق");
+
+  const res = await fetch(`${API_BASE}/verify-otp`, {
+    method: "POST",
+    headers: { Accept: "application/json", "Content-Type": "application/json" },
+    body: JSON.stringify({ phone: normalized, otp: code }),
+  });
+
+  const text = await res.text();
+  const data = parseJsonResponse(res, text);
+
+  if (!res.ok || data?.success === false) {
+    throw new Error(data?.message || "رمز التحقق غير صحيح");
+  }
+
+  return data;
+}
+
+/** حفظ جلسة المستخدم بعد التحقق من OTP */
+export function establishSession(sale) {
+  return setSession(sale);
+}
+
+/** POST /api/sales/login */
+export async function loginWithEmail(email, password) {
+  const { sale, message } = await verifyLoginCredentials(email, password);
   const session = setSession(sale);
-  return { sale: session.sale, message: data?.message };
+  return { sale: session.sale, message };
 }
 
 export async function logout() {

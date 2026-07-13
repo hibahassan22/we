@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import AppModal, { ModalField, ModalActions, modalInputClass } from "../ui/AppModal";
 import MapPickerModal, { MapPointButton } from "../ui/MapPickerModal";
-import { fetchCustomersList } from "../../services/customerService.js";
+import { fetchCustomersList, genderToApi } from "../../services/customerService.js";
 import { requestAddPassenger } from "../../services/tripService.js";
 import { formatApiTime, mapOperationDays } from "../../lib/tripFormUtils.js";
 import { useToast } from "../../lib/toast";
@@ -20,6 +20,7 @@ export default function TripPassengerModal({ isOpen, onClose, tripId, defaultDay
   const toast = useToast();
   const [customers, setCustomers] = useState([]);
   const [loadingCustomers, setLoadingCustomers] = useState(false);
+  const [customersError, setCustomersError] = useState(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(null);
   const [mapTarget, setMapTarget] = useState(null);
@@ -44,10 +45,17 @@ export default function TripPassengerModal({ isOpen, onClose, tripId, defaultDay
     setToCoords(null);
     setCustomerId("");
     setFullName("");
+    setCustomersError(null);
     setActiveDays(defaultDays.length ? defaultDays : ["sat", "sun", "mon"]);
     fetchCustomersList()
-      .then(setCustomers)
-      .catch(() => setCustomers([]))
+      .then((list) => {
+        setCustomers(list);
+        setCustomersError(null);
+      })
+      .catch((err) => {
+        setCustomers([]);
+        setCustomersError(err.message || "فشل تحميل قائمة العملاء");
+      })
       .finally(() => setLoadingCustomers(false));
   }, [isOpen, defaultDays]);
 
@@ -88,13 +96,15 @@ export default function TripPassengerModal({ isOpen, onClose, tripId, defaultDay
 
     setSubmitting(true);
     setError(null);
+    const selected = customers.find((x) => String(x.id) === String(customerId));
     try {
       await requestAddPassenger({
         trip_id: Number(tripId),
         customer_id: Number(customerId),
-        full_name: fullName,
+        full_name: fullName || selected?.full_name || selected?.name,
+        phone: selected?.phone || undefined,
         nationality,
-        gender,
+        gender: genderToApi(gender),
         operation_days: mapOperationDays(activeDays),
         start_lat: fromCoords.lat,
         start_lng: fromCoords.lng,
@@ -142,6 +152,12 @@ export default function TripPassengerModal({ isOpen, onClose, tripId, defaultDay
                 </option>
               ))}
             </select>
+            {customersError && (
+              <p className="text-[11px] text-red-600 text-right mt-1">{customersError}</p>
+            )}
+            {!loadingCustomers && !customersError && customers.length === 0 && (
+              <p className="text-[11px] text-amber-600 text-right mt-1">لا يوجد عملاء — أضف عميلاً من صفحة العملاء أولاً</p>
+            )}
           </ModalField>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">

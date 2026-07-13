@@ -67,6 +67,8 @@ function UsersPageContent() {
   const { can } = usePermissions();
   const canCreate = can(PERMISSIONS.USERS_CREATE);
   const canEdit = can(PERMISSIONS.USERS_EDIT);
+  const canDelete = can(PERMISSIONS.USERS_DELETE);
+  const canView = can(PERMISSIONS.USERS_READ);
 
   const [salesUsers, setSalesUsers] = useState([]);
   const [apiRoles, setApiRoles] = useState([]);
@@ -330,11 +332,11 @@ function UsersPageContent() {
           loading={loading}
           apiOnly
           roles={roleOptions}
-          onView={(user) => setViewUserId(user.uid ?? user.id)}
+          onView={canView ? (user) => setViewUserId(user.uid ?? user.id) : undefined}
           onEdit={setEditUser}
           onDelete={setDeleteTarget}
           canEdit={canEdit}
-          canDelete
+          canDelete={canDelete}
           deletingId={deletingId}
         />
 

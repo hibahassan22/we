@@ -158,6 +158,7 @@ export default function RewardsPage() {
   const { searchQuery } = useGlobalSearch();
   const { can } = usePermissions();
   const canViewSettings = can(PERMISSIONS.REWARDS_SETTINGS_READ);
+  const canEditSettings = can(PERMISSIONS.REWARDS_EDIT) || can(PERMISSIONS.REWARDS_CODE_EDIT);
   const canCreateCode = can(PERMISSIONS.REWARDS_CODE_CREATE);
   const canEditCode = can(PERMISSIONS.REWARDS_CODE_EDIT);
   const canDeleteCode = can(PERMISSIONS.REWARDS_CODE_DELETE);
@@ -361,10 +362,10 @@ export default function RewardsPage() {
           icon={<svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z"/></svg>}>
           <div className="flex items-center justify-between bg-[#f8f7f2] px-5 py-4 rounded-xl">
             <div className="text-right"><p className="text-sm font-bold text-gray-700">تفعيل المكافأة</p><p className="text-[11px] text-gray-500 mt-1">يتم منحها مرة واحدة لكل رقم هاتف عند التسجيل</p></div>
-            <Toggle checked={form.app_download_enabled} onChange={v => handleFieldChange('app_download_enabled', v)} disabled={isSaving}/>
+            <Toggle checked={form.app_download_enabled} onChange={v => handleFieldChange('app_download_enabled', v)} disabled={!canEditSettings || isSaving}/>
           </div>
           <div><label className="text-xs font-bold text-gray-600 block mb-2 text-right">قيمة المكافأة (ريال سعودي)</label>
-            <input type="number" value={form.app_download_reward} onChange={e=>handleFieldChange('app_download_reward', e.target.value)} className={inp} disabled={!form.app_download_enabled || isSaving}/></div>
+            <input type="number" value={form.app_download_reward} onChange={e=>handleFieldChange('app_download_reward', e.target.value)} className={inp} disabled={!canEditSettings || !form.app_download_enabled || isSaving}/></div>
         </SectionCard>
 
         {/* 2. مكافأة الدعوات */}
@@ -372,11 +373,11 @@ export default function RewardsPage() {
           icon={<svg className="w-6 h-6 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z"/></svg>}>
           <div className="flex items-center justify-between bg-[#f8f7f2] px-5 py-4 rounded-xl">
             <div className="text-right"><p className="text-sm font-bold text-gray-700">تفعيل نظام الدعوات</p><p className="text-[11px] text-gray-500 mt-1">يتم منح المكافأة بشكل متكرر عند الوصول للهدف</p></div>
-            <Toggle checked={form.invite_enabled} onChange={v => handleFieldChange('invite_enabled', v)} disabled={isSaving}/>
+            <Toggle checked={form.invite_enabled} onChange={v => handleFieldChange('invite_enabled', v)} disabled={!canEditSettings || isSaving}/>
           </div>
           <div className="grid grid-cols-2 gap-5">
-            <div><label className="text-xs font-bold text-gray-600 block mb-2 text-right">عدد الدعوات المطلوبة</label><input type="number" value={form.invite_required_count} onChange={e=>handleFieldChange('invite_required_count', e.target.value)} className={inp} disabled={!form.invite_enabled || isSaving}/></div>
-            <div><label className="text-xs font-bold text-gray-600 block mb-2 text-right">قيمة المكافأة (ريال سعودي)</label><input type="number" value={form.invite_reward_amount} onChange={e=>handleFieldChange('invite_reward_amount', e.target.value)} className={inp} disabled={!form.invite_enabled || isSaving}/></div>
+            <div><label className="text-xs font-bold text-gray-600 block mb-2 text-right">عدد الدعوات المطلوبة</label><input type="number" value={form.invite_required_count} onChange={e=>handleFieldChange('invite_required_count', e.target.value)} className={inp} disabled={!canEditSettings || !form.invite_enabled || isSaving}/></div>
+            <div><label className="text-xs font-bold text-gray-600 block mb-2 text-right">قيمة المكافأة (ريال سعودي)</label><input type="number" value={form.invite_reward_amount} onChange={e=>handleFieldChange('invite_reward_amount', e.target.value)} className={inp} disabled={!canEditSettings || !form.invite_enabled || isSaving}/></div>
           </div>
         </SectionCard>
 
@@ -385,18 +386,19 @@ export default function RewardsPage() {
           icon={<svg className="w-6 h-6 text-purple-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z"/></svg>}>
           <div className="flex items-center justify-between bg-[#f8f7f2] px-5 py-4 rounded-xl">
             <div className="text-right"><p className="text-sm font-bold text-gray-700">تفعيل نظام النقاط</p><p className="text-[11px] text-gray-500 mt-1">يجب تحويل النقاط الى نقود قبل الاستخدام</p></div>
-            <Toggle checked={form.points_enabled} onChange={v => handleFieldChange('points_enabled', v)} disabled={isSaving}/>
+            <Toggle checked={form.points_enabled} onChange={v => handleFieldChange('points_enabled', v)} disabled={!canEditSettings || isSaving}/>
           </div>
           <div className="grid grid-cols-2 gap-5">
-              <div><label className="text-xs font-bold text-gray-600 block mb-2 text-right">النقاط لكل مبلغ</label><input type="number" value={form.points_per_amount} onChange={e=>handleFieldChange('points_per_amount', e.target.value)} className={inp} disabled={!form.points_enabled || isSaving}/></div>
-              <div><label className="text-xs font-bold text-gray-600 block mb-2 text-right">قيمة النقطة</label><input type="number" value={form.points_value} onChange={e=>handleFieldChange('points_value', e.target.value)} className={inp} disabled={!form.points_enabled || isSaving}/></div>
-              <div><label className="text-xs font-bold text-gray-600 block mb-2 text-right">قيمة النقدية لكل نقطة</label><input type="number" value={form.point_money_value} onChange={e=>handleFieldChange('point_money_value', e.target.value)} className={inp} disabled={!form.points_enabled || isSaving}/></div>
-              <div><label className="text-xs font-bold text-gray-600 block mb-2 text-right">الحد الأدنى من النقاط للتحويل</label><input type="number" value={form.points_min_convert} onChange={e=>handleFieldChange('points_min_convert', e.target.value)} className={inp} disabled={!form.points_enabled || isSaving}/></div>
-              <div><label className="text-xs font-bold text-gray-600 block mb-2 text-right">انتهاء صلاحية النقاط (أيام)</label><input type="number" value={form.points_expiration_days} onChange={e=>handleFieldChange('points_expiration_days', e.target.value)} className={inp} disabled={!form.points_enabled || isSaving}/></div>
+              <div><label className="text-xs font-bold text-gray-600 block mb-2 text-right">النقاط لكل مبلغ</label><input type="number" value={form.points_per_amount} onChange={e=>handleFieldChange('points_per_amount', e.target.value)} className={inp} disabled={!canEditSettings || !form.points_enabled || isSaving}/></div>
+              <div><label className="text-xs font-bold text-gray-600 block mb-2 text-right">قيمة النقطة</label><input type="number" value={form.points_value} onChange={e=>handleFieldChange('points_value', e.target.value)} className={inp} disabled={!canEditSettings || !form.points_enabled || isSaving}/></div>
+              <div><label className="text-xs font-bold text-gray-600 block mb-2 text-right">قيمة النقدية لكل نقطة</label><input type="number" value={form.point_money_value} onChange={e=>handleFieldChange('point_money_value', e.target.value)} className={inp} disabled={!canEditSettings || !form.points_enabled || isSaving}/></div>
+              <div><label className="text-xs font-bold text-gray-600 block mb-2 text-right">الحد الأدنى من النقاط للتحويل</label><input type="number" value={form.points_min_convert} onChange={e=>handleFieldChange('points_min_convert', e.target.value)} className={inp} disabled={!canEditSettings || !form.points_enabled || isSaving}/></div>
+              <div><label className="text-xs font-bold text-gray-600 block mb-2 text-right">انتهاء صلاحية النقاط (أيام)</label><input type="number" value={form.points_expiration_days} onChange={e=>handleFieldChange('points_expiration_days', e.target.value)} className={inp} disabled={!canEditSettings || !form.points_enabled || isSaving}/></div>
           </div>
         </SectionCard>
         
         {/* زر حفظ الإعدادات */}
+        {canEditSettings && (
         <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 flex items-center justify-end">
           <button
             onClick={saveSettings}
@@ -406,6 +408,7 @@ export default function RewardsPage() {
             {isSaving ? "جارٍ الحفظ..." : "حفظ الاعدادات"}
           </button>
         </div>
+        )}
         </>
         )}
 

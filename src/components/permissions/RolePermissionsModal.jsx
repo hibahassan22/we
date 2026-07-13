@@ -3,6 +3,7 @@ import AppModal from "../ui/AppModal";
 import { useToast } from "../../lib/toast.jsx";
 import { usePermissions } from "../../hooks/usePermissions.js";
 import { PERMISSIONS } from "../../lib/permissions.js";
+import { useAuthContext } from "../../context/AuthContext.jsx";
 import { updateRolePermissions, isProtectedRole } from "../../services/roleService.js";
 import { fetchPermissions, fetchRolePermissionLinksByRoleId } from "../../services/permissionService.js";
 import {
@@ -15,8 +16,9 @@ import PermissionModuleList from "./PermissionModuleList.jsx";
 
 export default function RolePermissionsModal({ isOpen, onClose, role, onSaved }) {
   const toast = useToast();
-  const { can } = usePermissions();
-  const canEdit = can(PERMISSIONS.PERMISSIONS_EDIT);
+  const { role: myRoleId, refreshPermissions } = useAuthContext();
+  const { can, isAdmin } = usePermissions();
+  const canEdit = isAdmin || can(PERMISSIONS.PERMISSIONS_EDIT) || can(PERMISSIONS.ROLES_EDIT);
   const [modules, setModules] = useState([]);
   const [moduleState, setModuleState] = useState({});
   const [loading, setLoading] = useState(false);
@@ -63,7 +65,10 @@ export default function RolePermissionsModal({ isOpen, onClose, role, onSaved })
     try {
       const permissionIds = permissionIdsFromModuleState(modules, moduleState);
       await updateRolePermissions(role.id, permissionIds);
-      toast.success(`تم حفظ صلاحيات «${role.name}»`);
+      if (String(myRoleId) === String(role.id)) {
+        await refreshPermissions();
+      }
+      toast.success(`تم حفظ صلاحيات «${role.name}» — يُفضّل إعادة تسجيل الدخول لتطبيقها`);
       onSaved?.();
       onClose();
     } catch (err) {
@@ -109,13 +114,13 @@ export default function RolePermissionsModal({ isOpen, onClose, role, onSaved })
           <p className="text-sm font-bold text-gray-800">{role.name}</p>
           {role.description && <p className="text-xs text-gray-500 mt-0.5">{role.description}</p>}
           <p className="text-[11px] text-[#c9a84c] mt-2">
-            مفعّل: {enabledCount} / {total} — ما لا تفعّله لن يظهر للمستخدمين بهذا الدور
+            مفعّل: {enabledCount} / {total} — ما تفعّله هنا يُطبَّق على كل مستخدم بهذا الدور (Sales أو أي دور آخر)
           </p>
         </div>
 
         {isProtectedRole(role) ? (
           <p className="text-sm text-gray-600 text-right bg-gray-50 border border-gray-100 rounded-xl p-4">
-            دور مدير النظام لديه صلاحيات كاملة تلقائياً.
+            دور الأدمن لديه صلاحيات كاملة تلقائياً — يمكنه تفعيل أي صلاحية لأي دور آخر.
           </p>
         ) : loading ? (
           <div className="flex justify-center py-12">

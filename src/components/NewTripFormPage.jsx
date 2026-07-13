@@ -7,10 +7,12 @@ import { fetchCustomersList } from "../services/customerService.js";
 import AddClientModal from "./clients/AddClientModal";
 import { buildTripCreatePayload } from "../lib/tripFormUtils.js";
 import {
-  sanitizePhoneInput,
-  validatePhoneTenDigits,
-  normalizeSaudiPhoneFromApi,
+  sanitizePhoneInputFiveStart,
+  validatePhoneTenDigitsFiveStart,
+  normalizeSaudiPhoneForInputFiveStart,
 } from "../lib/phoneValidation.js";
+import { usePermissions } from "../hooks/usePermissions.js";
+import { PERMISSIONS } from "../lib/permissions.js";
 
 // ── Map Picker Modal (OpenStreetMap + Leaflet via CDN) ─────────────
 function MapPickerModal({ title, onClose, onConfirm }) {
@@ -182,8 +184,8 @@ function SaudiPhoneInput({ value, onChange, disabled, invalid, hint }) {
           type="tel"
           inputMode="numeric"
           value={value}
-          onChange={(e) => onChange(sanitizePhoneInput(e.target.value))}
-          placeholder="05xxxxxxxx"
+          onChange={(e) => onChange(sanitizePhoneInputFiveStart(e.target.value))}
+          placeholder="5xxxxxxxxx"
           maxLength={10}
           disabled={disabled}
           className={`flex-1 rounded-xl border px-3 py-2.5 text-sm focus:outline-none bg-white text-left placeholder-gray-300 ${
@@ -192,6 +194,144 @@ function SaudiPhoneInput({ value, onChange, disabled, invalid, hint }) {
         />
       </div>
       {hint && <p className={`text-[11px] text-right ${invalid ? "text-red-600" : "text-gray-400"}`}>{hint}</p>}
+    </div>
+  );
+}
+
+function formatCustomerPhone(phone) {
+  const digits = normalizeSaudiPhoneForInputFiveStart(phone);
+  return digits || "بدون هاتف";
+}
+
+function formatCustomerOption(c) {
+  const name = c.name ?? c.full_name ?? "—";
+  return `${name} — ${formatCustomerPhone(c.phone)}`;
+}
+
+function CustomerSearchSelect({
+  customers,
+  value,
+  onChange,
+  loading,
+  disabled,
+  canAddClient,
+  onAddClient,
+}) {
+  const [query, setQuery] = useState("");
+  const [open, setOpen] = useState(false);
+  const containerRef = useRef(null);
+
+  const selected = useMemo(
+    () => customers.find((c) => String(c.id) === String(value)),
+    [customers, value]
+  );
+
+  useEffect(() => {
+    if (selected) {
+      setQuery(formatCustomerOption(selected));
+    } else if (!open) {
+      setQuery("");
+    }
+  }, [selected, open]);
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q || (selected && query === formatCustomerOption(selected))) {
+      return customers;
+    }
+    const qDigits = q.replace(/\D/g, "");
+    return customers.filter((c) => {
+      const name = String(c.name ?? c.full_name ?? "").toLowerCase();
+      const phone = String(c.phone ?? "").replace(/\D/g, "");
+      const displayPhone = formatCustomerPhone(c.phone).replace(/\D/g, "");
+      return (
+        name.includes(q) ||
+        (qDigits && (phone.includes(qDigits) || displayPhone.includes(qDigits)))
+      );
+    });
+  }, [customers, query, selected]);
+
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      if (containerRef.current && !containerRef.current.contains(e.target)) {
+        setOpen(false);
+        if (selected) setQuery(formatCustomerOption(selected));
+        else setQuery("");
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [selected]);
+
+  const handleInputChange = (e) => {
+    const next = e.target.value;
+    setQuery(next);
+    setOpen(true);
+    if (selected && next !== formatCustomerOption(selected)) {
+      onChange("");
+    }
+  };
+
+  const handleSelect = (c) => {
+    onChange(String(c.id));
+    setQuery(formatCustomerOption(c));
+    setOpen(false);
+  };
+
+  const showAddClient = canAddClient && query.trim().length > 0 && !loading;
+
+  return (
+    <div className="space-y-1">
+      <div className="flex gap-2 items-stretch">
+        <div ref={containerRef} className="relative flex-1 min-w-0">
+          <input
+            type="text"
+            value={query}
+            onChange={handleInputChange}
+            onFocus={() => !disabled && setOpen(true)}
+            disabled={disabled || loading}
+            placeholder={loading ? "جاري تحميل العملاء..." : "ابحث بالاسم أو رقم الهاتف..."}
+            className="w-full rounded-xl border border-gray-200 px-3 py-2.5 text-sm focus:border-[#c9a84c] focus:outline-none bg-white text-right placeholder-gray-300 disabled:opacity-60"
+            autoComplete="off"
+          />
+          <div className="absolute left-3 top-3 pointer-events-none text-gray-400">
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+            </svg>
+          </div>
+          {open && !disabled && !loading && (
+            <ul className="absolute z-30 mt-1 w-full max-h-52 overflow-y-auto rounded-xl border border-gray-200 bg-white shadow-lg py-1">
+              {filtered.length === 0 ? (
+                <li className="px-3 py-2.5 text-xs text-gray-400 text-right">لا توجد نتائج</li>
+              ) : (
+                filtered.map((c) => (
+                  <li key={c.id}>
+                    <button
+                      type="button"
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => handleSelect(c)}
+                      className={`w-full px-3 py-2.5 text-sm text-right hover:bg-amber-50 transition-colors ${
+                        String(c.id) === String(value) ? "bg-amber-50 text-[#c9a84c] font-medium" : "text-gray-700"
+                      }`}
+                    >
+                      {formatCustomerOption(c)}
+                    </button>
+                  </li>
+                ))
+              )}
+            </ul>
+          )}
+        </div>
+        {showAddClient && (
+          <button
+            type="button"
+            onClick={onAddClient}
+            className="shrink-0 px-3 py-2 rounded-xl border border-[#c9a84c] text-[#c9a84c] text-xs font-bold hover:bg-amber-50 transition-colors whitespace-nowrap"
+          >
+            + إضافة عميل
+          </button>
+        )}
+      </div>
     </div>
   );
 }
@@ -702,13 +842,13 @@ function PassengerCard({ idx, activeDays, useMap, onToggleUseMap, sameTime, onTo
         {/* Classification + Gender */}
         <div className="grid grid-cols-2 gap-3">
           <Field label="جنس العميل">
-            <Sel value="" onChange={() => {}}>
-              <option value="">اختر الجنس</option><option>ذكر</option><option>أنثى</option>
+            <Sel value="ذكر" onChange={() => {}}>
+              <option>ذكر</option><option>أنثى</option>
             </Sel>
           </Field>
           <Field label="تصنيف العميل">
-            <Sel value="" onChange={() => {}}>
-              <option value="">اختر التصنيف</option><option>VIP</option><option>عادي</option>
+            <Sel value="عادي" onChange={() => {}}>
+              <option>VIP</option><option>عادي</option>
             </Sel>
           </Field>
         </div>
@@ -789,6 +929,9 @@ function PassengerRow({ idx, onRemove }) {
 // ── Main page ──────────────────────────────────────────────────────
 export default function NewTripFormPage() {
   const navigate = useNavigate();
+  const { can } = usePermissions();
+  const canCreate = can(PERMISSIONS.TRIPS_ADS_CREATE) || can(PERMISSIONS.TRIPS_CREATE);
+  const canAddClient = can(PERMISSIONS.CLIENTS_CREATE);
 
   const [tripCard,    setTripCard]    = useState("subscription");
   const [passengers,  setPassengers]  = useState("single");
@@ -811,8 +954,8 @@ export default function NewTripFormPage() {
   const [clientName,  setClientName]  = useState("");
   const [clientPhone, setClientPhone] = useState("");
   const [nationality, setNationality] = useState("سعودي");
-  const [clientType,  setClientType]  = useState("");
-  const [clientGender,setClientGender]= useState("");
+  const [clientType,  setClientType]  = useState("عادي");
+  const [clientGender,setClientGender]= useState("ذكر");
   const [fromCity,    setFromCity]    = useState("");
   const [toCity,      setToCity]      = useState("");
   const [departureTime, setDepartureTime] = useState("07:00");
@@ -853,9 +996,9 @@ export default function NewTripFormPage() {
     const c = customers.find((x) => String(x.id) === String(id));
     if (c) {
       setClientName(c.name ?? c.full_name ?? "");
-      setClientPhone(normalizeSaudiPhoneFromApi(c.phone ?? ""));
+      setClientPhone(normalizeSaudiPhoneForInputFiveStart(c.phone ?? ""));
       setNationality(c.nationality ?? "سعودي");
-      setClientGender(c.gender ?? "");
+      setClientGender(c.gender === "أنثى" || c.gender === "female" ? "أنثى" : "ذكر");
     }
   };
 
@@ -868,12 +1011,12 @@ export default function NewTripFormPage() {
     setCustomersError(null);
     setCustomerId(String(created.id));
     setClientName(created.name ?? created.full_name ?? "");
-    setClientPhone(normalizeSaudiPhoneFromApi(created.phone ?? ""));
+    setClientPhone(normalizeSaudiPhoneForInputFiveStart(created.phone ?? ""));
     setNationality(created.nationality ?? "سعودي");
-    setClientGender(created.gender ?? "");
+    setClientGender(created.gender === "أنثى" || created.gender === "female" ? "أنثى" : "ذكر");
   };
 
-  const phoneValidation = useMemo(() => validatePhoneTenDigits(clientPhone), [clientPhone]);
+  const phoneValidation = useMemo(() => validatePhoneTenDigitsFiveStart(clientPhone), [clientPhone]);
   const phoneInvalid = clientPhone.length > 0 && !phoneValidation.valid;
 
   // ── Map picker ─────────────────────────────────────────────────
@@ -1201,32 +1344,20 @@ export default function NewTripFormPage() {
           icon={<svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" /></svg>}>
           <div className="space-y-3">
             <Field label="الراكب الأساسي (من العملاء) *">
-              <div className="flex gap-2 items-stretch">
-                <div className="flex-1 min-w-0">
-                  <Sel value={customerId} onChange={(e) => handleCustomerSelect(e.target.value)} disabled={customersLoading}>
-                    <option value="">
-                      {customersLoading ? "جاري تحميل العملاء..." : customers.length ? "اختر العميل" : "لا يوجد عملاء — أضف عميلاً جديداً"}
-                    </option>
-                    {customers.map((c) => (
-                      <option key={c.id} value={c.id}>
-                        {c.name} — {c.phone || "بدون هاتف"}
-                      </option>
-                    ))}
-                  </Sel>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setShowAddClient(true)}
-                  className="shrink-0 px-3 py-2 rounded-xl border border-[#c9a84c] text-[#c9a84c] text-xs font-bold hover:bg-amber-50 transition-colors whitespace-nowrap"
-                >
-                  + إضافة عميل
-                </button>
-              </div>
+              <CustomerSearchSelect
+                customers={customers}
+                value={customerId}
+                onChange={handleCustomerSelect}
+                loading={customersLoading}
+                disabled={customersLoading}
+                canAddClient={canAddClient}
+                onAddClient={() => setShowAddClient(true)}
+              />
               {customersError && (
                 <p className="text-[11px] text-red-600 text-right mt-1">{customersError}</p>
               )}
               {!customersLoading && !customersError && customers.length === 0 && (
-                <p className="text-[11px] text-amber-700 text-right mt-1">لا توجد عملاء — اضغط «إضافة عميل» لإنشاء عميل وربطه بالرحلة.</p>
+                <p className="text-[11px] text-amber-700 text-right mt-1">لا توجد عملاء — ابحث واضغط «إضافة عميل» لإنشاء عميل جديد.</p>
               )}
             </Field>
             {isGroup && (
@@ -1246,8 +1377,8 @@ export default function NewTripFormPage() {
                     phoneInvalid
                       ? phoneValidation.message
                       : clientPhone.length > 0
-                        ? "10 أرقام — مثال: 05xxxxxxxx"
-                        : "كود السعودية +966 — 10 أرقام"
+                        ? "10 أرقام تبدأ بـ 5 — مثال: 5xxxxxxxxx"
+                        : "كود السعودية +966 — 10 أرقام تبدأ بـ 5"
                   }
                 />
               </Field>
@@ -1257,8 +1388,8 @@ export default function NewTripFormPage() {
               <Input placeholder="سعودي" value={nationality} onChange={(e) => setNationality(e.target.value)} />
             </Field>
             <div className="grid grid-cols-2 gap-3">
-              <Field label="جنس العميل"><Sel value={clientGender} onChange={e => setClientGender(e.target.value)}><option value="">اختر الجنس</option><option>ذكر</option><option>أنثى</option></Sel></Field>
-              <Field label="تصنيف العميل"><Sel value={clientType} onChange={e => setClientType(e.target.value)}><option value="">اختر التصنيف</option><option>VIP</option><option>عادي</option></Sel></Field>
+              <Field label="جنس العميل"><Sel value={clientGender} onChange={e => setClientGender(e.target.value)}><option>ذكر</option><option>أنثى</option></Sel></Field>
+              <Field label="تصنيف العميل"><Sel value={clientType} onChange={e => setClientType(e.target.value)}><option>VIP</option><option>عادي</option></Sel></Field>
             </div>
           </div>
         </Section>
@@ -1354,7 +1485,7 @@ export default function NewTripFormPage() {
 
       <button
         onClick={handleSubmit}
-        disabled={submitting}
+        disabled={submitting || !canCreate}
         className="w-full bg-[#4a4644] text-white font-bold py-4 rounded-2xl hover:bg-black transition-colors text-sm disabled:opacity-60"
       >
         {submitting ? "جاري الإنشاء..." : "إنشاء رحله"}

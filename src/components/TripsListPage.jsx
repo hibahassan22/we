@@ -25,6 +25,7 @@ import { useToast } from '../lib/toast.jsx';
 import { fetchAllTripsForList, fetchOfferedTripsList, normalizeWithoutDriverTrip, fetchTripsHasDriverMap, hasAssignedDriver, deleteTripWithoutDriver } from "../services/tripService.js";
 import { usePermissions } from '../hooks/usePermissions.js';
 import { PERMISSIONS } from '../lib/permissions.js';
+import { exportToExcel, tripToExportRow } from '../lib/exportExcel.js';
 
 const OFFERED_STATUS_MAP = {
     pending: { label: "معلقة", color: "bg-amber-600" },
@@ -33,11 +34,13 @@ const OFFERED_STATUS_MAP = {
     cancelled: { label: "ملغية", color: "bg-red-600" },
 };
 
-function TripTypeTabs({ active, onChange, driverCount, offeredCount }) {
+function TripTypeTabs({ active, onChange, driverCount, offeredCount, showDriver, showOffered }) {
     const tabs = [
-        { id: "offered", label: "الرحلات المعروضة", count: offeredCount, icon: Sparkles },
-        { id: "driver", label: "رحلات مسندة لسائق", count: driverCount, icon: Car },
-    ];
+        showOffered && { id: "offered", label: "الرحلات المعروضة", count: offeredCount, icon: Sparkles },
+        showDriver && { id: "driver", label: "رحلات مسندة لسائق", count: driverCount, icon: Car },
+    ].filter(Boolean);
+
+    if (!tabs.length) return null;
 
     const handleClick = (id) => {
         onChange(active === id ? null : id);
@@ -116,11 +119,18 @@ const TripsLog = () => {
     const toast = useToast();
     const canEdit = can(PERMISSIONS.TRIPS_EDIT);
     const canExport = can(PERMISSIONS.TRIPS_EXPORT);
+    const canAddPayment = can(PERMISSIONS.TRIPS_PAYMENT_ADD);
+    const canChangeStatus = can(PERMISSIONS.TRIPS_STATUS_CHANGE);
+    const canViewDetails = can(PERMISSIONS.TRIPS_VIEW_DETAILS);
+    const canDriverTab = can(PERMISSIONS.TRIPS_DRIVER_TAB);
+    const canOfferedTab = can(PERMISSIONS.TRIPS_OFFERED_TAB);
     const canAdsEdit = can(PERMISSIONS.TRIPS_ADS_EDIT);
     const canAdsPublish = can(PERMISSIONS.TRIPS_ADS_PUBLISH);
     const canAdsDelete = can(PERMISSIONS.TRIPS_ADS_DELETE);
-    const canOfferedEdit = canAdsEdit || canEdit;
-    const canOfferedPublish = canAdsPublish || canOfferedEdit;
+    const canOfferedAssign = can(PERMISSIONS.TRIPS_OFFERED_ASSIGN);
+    const canOfferedChat = can(PERMISSIONS.TRIPS_OFFERED_CHAT);
+    const canOfferedEdit = canAdsEdit;
+    const canOfferedPublish = canAdsPublish;
 
     const filteredTrips = useMemo(
         () => filterByGlobalSearch(trips, searchQuery, (trip) => {
@@ -346,32 +356,34 @@ const TripsLog = () => {
                 <div className="bg-gray-50/50 p-4 border-l border-gray-100 flex flex-col gap-2 justify-center w-full md:w-44 text-center">
                     <span className="text-xs font-semibold text-gray-400 mb-1 block">الإجراءات</span>
 
-                    {variant === "driver" && canEdit && (
-                        <>
+                    {variant === "driver" && canAddPayment && (
                             <button
                                 onClick={() => { setSelectedTripId(trip.id); setIsPaymentModalOpen(true); }}
                                 className="flex items-center justify-center gap-1 bg-[#474747] text-white text-xs py-1.5 px-3 rounded hover:bg-black transition-colors"
                             >
                                 <Plus className="w-3.5 h-3.5" /> اضافة دفعه
                             </button>
+                    )}
+                    {variant === "driver" && canChangeStatus && (
                             <button
                                 onClick={() => { setStatusTrip(trip); setIsStatusModalOpen(true); }}
                                 className="flex items-center justify-center gap-1 bg-white border border-gray-300 text-gray-700 text-xs py-1.5 px-3 rounded hover:bg-gray-50 transition-colors"
                             >
                                 <RefreshCw className="w-3.5 h-3.5 text-gray-400" /> تغيير الحالة
                             </button>
+                    )}
+                    {variant === "driver" && canEdit && (
                             <button
                                 onClick={() => handleEditClick(trip)}
                                 className="flex items-center justify-center gap-1 bg-white border border-gray-300 text-gray-700 text-xs py-1.5 px-3 rounded hover:bg-gray-50 transition-colors"
                             >
                                 <Edit2 className="w-3.5 h-3.5 text-gray-400" /> تعديل
                             </button>
-                        </>
                     )}
 
                     {variant === "offered" && (
                         <>
-                            {canOfferedEdit && (
+                            {canOfferedAssign && (
                                 <button
                                     type="button"
                                     onClick={() => setAssignModal({ open: true, tripId: trip.id })}
@@ -403,6 +415,7 @@ const TripsLog = () => {
                                 </button>
                             )}
 
+                            {canOfferedChat && (
                             <button
                                 type="button"
                                 onClick={() => setChatModal({
@@ -414,6 +427,7 @@ const TripsLog = () => {
                             >
                                 المحادثات
                             </button>
+                            )}
 
                             {canAdsDelete && (
                                 <button
@@ -427,7 +441,7 @@ const TripsLog = () => {
                         </>
                     )}
 
-                    {variant === "driver" && (
+                    {variant === "driver" && canViewDetails && (
                         <Link
                             to={`/trips/${trip.id}`}
                             className="flex items-center justify-center gap-1 bg-white border border-gray-300 text-gray-700 text-xs py-1.5 px-3 rounded hover:bg-gray-50 transition-colors no-underline"
@@ -440,61 +454,30 @@ const TripsLog = () => {
         );
     };
 
-    const handlePrint = () => {
-        const printContent = trips.map(trip => `
-            <tr>
-                <td style="padding: 12px; border: 1px solid #e5e7eb;">${trip.id}</td>
-                <td style="padding: 12px; border: 1px solid #e5e7eb;">${trip.customerName}</td>
-                <td style="padding: 12px; border: 1px solid #e5e7eb;">${trip.driver}</td>
-                <td style="padding: 12px; border: 1px solid #e5e7eb;">${trip.from} - ${trip.to}</td>
-                <td style="padding: 12px; border: 1px solid #e5e7eb;">${trip.price}</td>
-                <td style="padding: 12px; border: 1px solid #e5e7eb; font-weight: bold;">${trip.status}</td>
-            </tr>
-        `).join('');
+    const handleExport = () => {
+        let rows = [];
+        if (activeList === "driver") {
+            rows = filteredTrips.map((t) => tripToExportRow(t, "driver"));
+        } else if (activeList === "offered") {
+            rows = filteredOfferedTrips.map((t) => tripToExportRow(t, "offered"));
+        } else {
+            rows = [
+                ...filteredTrips.map((t) => tripToExportRow(t, "driver")),
+                ...filteredOfferedTrips.map((t) => tripToExportRow(t, "offered")),
+            ];
+        }
 
-        const printWindow = window.open('', '_blank');
-        printWindow.document.write(`
-            <html dir="rtl">
-            <head>
-                <title>طباعة سجل الرحلات</title>
-                <style>
-                    body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; padding: 30px; color: #333; }
-                    .header { text-align: center; margin-bottom: 30px; }
-                    .header h1 { color: #b88121; margin: 0; }
-                    .header p { color: #666; font-size: 14px; }
-                    table { width: 100%; border-collapse: collapse; text-align: right; }
-                    th { background-color: #f9fafb; padding: 12px; border: 1px solid #e5e7eb; color: #4b5563; font-weight: 600; }
-                </style>
-            </head>
-            <body>
-                <div class="header">
-                    <h1>سجل الرحلات</h1>
-                    <p>تقرير مطبوع بجميع تفاصيل الرحلات الحالية</p>
-                </div>
-                <table>
-                    <thead>
-                        <tr>
-                            <th>رقم الرحلة</th>
-                            <th>العميل</th>
-                            <th>السائق</th>
-                            <th>المسار</th>
-                            <th>السعر</th>
-                            <th>الحالة</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        ${printContent}
-                    </tbody>
-                </table>
-                <script>
-                    window.onload = function() {
-                        window.print();
-                    }
-                </script>
-            </body>
-            </html>
-        `);
-        printWindow.document.close();
+        if (!rows.length) {
+            toast.error("لا توجد بيانات للتصدير");
+            return;
+        }
+
+        try {
+            exportToExcel(rows, "سجل_الرحلات", "الرحلات");
+            toast.success("تم تصدير البيانات بنجاح");
+        } catch (err) {
+            toast.error(err.message || "فشل التصدير");
+        }
     };
 
     return (
@@ -516,7 +499,7 @@ const TripsLog = () => {
                     </button>
                     {canExport && (
                     <button
-                        onClick={handlePrint}
+                        onClick={handleExport}
                         className="flex items-center gap-1.5 bg-white px-3 py-1.5 rounded-lg border border-gray-200 text-xs text-gray-600 hover:bg-gray-50 transition-colors"
                     >
                         <Download className="w-3.5 h-3.5 text-gray-500" />
@@ -571,6 +554,8 @@ const TripsLog = () => {
                         onChange={setActiveList}
                         driverCount={filteredTrips.length}
                         offeredCount={filteredOfferedTrips.length}
+                        showDriver={canDriverTab}
+                        showOffered={canOfferedTab}
                     />
 
                     {activeList && (

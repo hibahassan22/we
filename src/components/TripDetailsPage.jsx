@@ -13,8 +13,8 @@ import TripNoteModal from "./trip-details/TripNoteModal";
 import TripRefundModal from "./trip-details/TripRefundModal";
 import TripChangeStatusModal from "./trip-details/TripChangeStatusModal";
 import CustomerProfileModal from "./trip-details/CustomerProfileModal";
+import TripCustomerCard from "./trip-details/TripCustomerCard";
 import DriverProfileModal from "./trip-details/DriverProfileModal";
-import SalesProfileModal from "./trip-details/SalesProfileModal";
 import TripPassengerModal from "./trip-details/TripPassengerModal";
 import AssignTripModal from "./AssignTripModal";
 import ImageProofModal from "./trip-details/ImageProofModal";
@@ -26,6 +26,12 @@ import {
   requestDeletePassenger,
 } from "../services/tripService.js";
 import { loadTripPayments, saveTripPayment } from "../lib/tripPaymentProofs.js";
+import {
+  fetchCustomersList,
+  findCustomerIdByPassenger,
+} from "../services/customerService.js";
+import { usePermissions } from "../hooks/usePermissions.js";
+import { PERMISSIONS } from "../lib/permissions.js";
 
 const TABS = [
   { id: "trip", label: "بيانات الرحلة" },
@@ -307,10 +313,40 @@ function mapOperationDayIds(days) {
   return days.map((d) => map[d] ?? d).filter(Boolean);
 }
 
+/** معرّف العميل المرتبط بالرحلة — من customer_id أو مطابقة الاسم/الهاتف */
+function resolveTripCustomerId(trip, passengers = [], customers = []) {
+  for (const p of passengers) {
+    const id = p.customerId ?? findCustomerIdByPassenger(p, customers);
+    if (id != null) return id;
+  }
+  const mp = trip?.main_passenger ?? trip?.["الراكب الاساسى"] ?? trip?.["الراكب الأساسي"];
+  if (mp?.customer_id != null) return String(mp.customer_id);
+  if (mp) {
+    const matched = findCustomerIdByPassenger(mp, customers);
+    if (matched) return matched;
+  }
+  if (trip?.customer_id != null) return String(trip.customer_id);
+  if (trip?.customer?.id != null) return String(trip.customer.id);
+  return null;
+}
+
+function enrichPassengersWithCustomerIds(passengers = [], customers = []) {
+  return passengers.map((p) => ({
+    ...p,
+    resolvedCustomerId: p.customerId ?? findCustomerIdByPassenger(p, customers),
+  }));
+}
+
 export default function TripDetailsPage() {
   const navigate = useNavigate();
   const { tripId } = useParams();
   const toast = useToast();
+  const { can } = usePermissions();
+  const canEdit = can(PERMISSIONS.TRIPS_EDIT);
+  const canAddPayment = can(PERMISSIONS.TRIPS_PAYMENT_ADD);
+  const canChangeStatus = can(PERMISSIONS.TRIPS_STATUS_CHANGE);
+  const canAssign = can(PERMISSIONS.TRIPS_OFFERED_ASSIGN);
+  const canDeleteOffered = can(PERMISSIONS.TRIPS_ADS_DELETE);
 
   const [trip, setTrip] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -325,18 +361,24 @@ export default function TripDetailsPage() {
   const [showEdit, setShowEdit] = useState(false);
   const [showCustomerProfile, setShowCustomerProfile] = useState(false);
   const [showDriverProfile, setShowDriverProfile] = useState(false);
-  const [showSalesProfile, setShowSalesProfile] = useState(false);
   const [showPassengerModal, setShowPassengerModal] = useState(false);
   const [showAssignDriver, setShowAssignDriver] = useState(false);
   const [passengerProfileId, setPassengerProfileId] = useState(null);
   const [deletePassenger, setDeletePassenger] = useState(null);
   const [deletePassengerLoading, setDeletePassengerLoading] = useState(false);
   const [proofImageUrl, setProofImageUrl] = useState(null);
+  const [customersList, setCustomersList] = useState([]);
   const [localPayments, setLocalPayments] = useState(() => loadTripPayments(tripId));
 
   useEffect(() => {
     setLocalPayments(loadTripPayments(tripId));
   }, [tripId]);
+
+  useEffect(() => {
+    fetchCustomersList()
+      .then(setCustomersList)
+      .catch(() => setCustomersList([]));
+  }, []);
 
   const fetchTrip = useCallback(async ({ silent = false } = {}) => {
     if (!silent) setLoading(true);
@@ -413,21 +455,25 @@ export default function TripDetailsPage() {
   };
 
   const handleDeletePassenger = async () => {
-    if (!deletePassenger?.customerId && !deletePassenger?.passengerId) return;
+    const cid = deletePassenger?.resolvedCustomerId ?? deletePassenger?.customerId;
+    if (!cid) {
+      toast.error("لا يمكن تحديد العميل — جرّبي تحديث الصفحة");
+      return;
+    }
     setDeletePassengerLoading(true);
     try {
       await requestDeletePassenger({
         tripId,
-        customerId: deletePassenger.customerId,
-        passengerId: deletePassenger.passengerId,
+        customerId: cid,
       });
       toast.success("تم إرسال طلب حذف الراكب لمركز الموافقات");
       setDeletePassenger(null);
     } catch (err) {
       const msg = err.message || "فشل إرسال طلب الحذف";
+      const lower = msg.toLowerCase();
       toast.error(
-        msg.includes("not found") || msg.includes("غير موجود") || msg.includes("لم يتم")
-          ? "الراكب غير مرتبط بهذه الرحلة — تأكدي أنه مضاف فعلياً وليس مجرد طلب معلق"
+        lower.includes("not found") || lower.includes("غير موجود") || lower.includes("لم يتم") || lower.includes("pending")
+          ? "تعذّر الحذف — تأكدي أن طلب الإضافة تمت الموافقة عليه وأن الراكب مرتبط فعلياً بالرحلة"
           : msg
       );
     } finally {
@@ -460,34 +506,16 @@ export default function TripDetailsPage() {
   const remaining = Number(trip.remaining_amount ?? 0) || Math.max(0, total - paid);
   const payments = buildPayments(trip, localPayments);
   const dName = driverName(trip.driver);
-  const customerName =
-    trip.main_passenger?.full_name ??
-    trip.customer?.name ??
-    trip.customer_name ??
-    trip.client_name ??
-    "—";
-  const customerPhone =
-    trip.main_passenger?.phone ??
-    trip.customer?.phone ??
-    trip.customer_phone ??
-    "—";
-  const customerId =
-    trip.main_passenger?.customer_id ??
-    trip["الراكب الاساسى"]?.customer_id ??
-    trip["الراكب الأساسي"]?.customer_id ??
-    trip.customer_id;
+  const tripHasDriver = hasAssignedDriver(trip);
+  const passengers = extractTripPassengers(trip);
+  const enrichedPassengers = enrichPassengersWithCustomerIds(passengers, customersList);
+  const tripCustomerId = resolveTripCustomerId(trip, passengers, customersList);
+  const showCustomerCard = tripCustomerId != null;
   const operatingDays = Array.isArray(trip.operation_days) && trip.operation_days.length
     ? trip.operation_days
     : (Array.isArray(trip.days) ? trip.days : []);
-  const salesRecord = Array.isArray(trip.sales) && trip.sales.length ? trip.sales[0] : null;
-  const salesId = salesRecord?.id ?? trip.sales_ids?.[0] ?? trip.sales_id;
-  const salesName = salesRecord?.name ?? trip.assisted_by ?? "—";
-  const salesPhone = salesRecord?.phone ?? "—";
   const tripStatus = normalizeTripStatus(trip);
-  const assistedBy = trip.assisted_by ?? "—";
   const ourCommission = Number(trip.our_commission ?? 0);
-  const passengers = extractTripPassengers(trip);
-  const tripHasDriver = hasAssignedDriver(trip);
   const driverId = trip.driver?.id ?? trip.driver_id;
   const operationDayIds = mapOperationDayIds(trip.operation_days ?? trip.days);
 
@@ -519,14 +547,18 @@ export default function TripDetailsPage() {
               </div>
             </div>
             <div className="flex gap-2 shrink-0">
+              {canChangeStatus && (
               <button type="button" onClick={() => setShowStatus(true)}
                 className="inline-flex items-center gap-1.5 bg-white border border-gray-200 text-gray-600 text-xs font-semibold px-4 py-2 rounded-xl hover:bg-gray-50 transition-colors">
                 <RefreshCw className="w-3.5 h-3.5" /> تغيير الحالة
               </button>
+              )}
+              {canEdit && (
               <button type="button" onClick={() => setShowEdit(true)}
                 className="inline-flex items-center gap-1.5 bg-[#4a4746] text-white text-xs font-semibold px-4 py-2 rounded-xl hover:bg-[#383534] transition-colors">
                 <Pencil className="w-3.5 h-3.5" /> تعديل الرحلة
               </button>
+              )}
             </div>
           </div>
         </div>
@@ -581,27 +613,9 @@ export default function TripDetailsPage() {
               </div>
               <hr className="border-gray-200" />
               <div>
-                <SectionTitle>الموظفين</SectionTitle>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div>
-                    <FieldCol label="مندوب المبيعات:" value={salesName} />
-                    {salesId && (
-                      <button
-                        type="button"
-                        onClick={() => setShowSalesProfile(true)}
-                        className="mt-2 text-[11px] text-[#c9a84c] font-semibold hover:underline"
-                      >
-                        عرض ملف مندوب المبيعات
-                      </button>
-                    )}
-                  </div>
-                  <FieldCol label="مساعدة بواسطة:" value={assistedBy} />
-                </div>
-              </div>
-              <hr className="border-gray-200" />
-              <div>
                 <div className="flex justify-between items-center gap-3 mb-3 flex-wrap">
                   <SectionTitle>الركاب</SectionTitle>
+                  {canEdit && (
                   <button
                     type="button"
                     onClick={() => setShowPassengerModal(true)}
@@ -609,6 +623,7 @@ export default function TripDetailsPage() {
                   >
                     <UserPlus className="w-3.5 h-3.5" /> إضافة راكب
                   </button>
+                  )}
                 </div>
                 {passengers.length === 0 ? (
                   <p className="text-center text-gray-400 text-xs py-6 bg-white rounded-xl border border-gray-100">
@@ -616,9 +631,9 @@ export default function TripDetailsPage() {
                   </p>
                 ) : (
                   <div className="space-y-2">
-                    {passengers.map((p, index) => (
+                    {enrichedPassengers.map((p, index) => (
                       <div
-                        key={p.passengerId ?? p.customerId ?? `${p.name}-${index}`}
+                        key={p.passengerId ?? p.resolvedCustomerId ?? `${p.name}-${index}`}
                         className="bg-white border border-gray-100 rounded-xl px-4 py-3 flex items-center justify-between gap-3 flex-wrap"
                       >
                         <div className="flex items-center gap-2 min-w-0">
@@ -636,11 +651,11 @@ export default function TripDetailsPage() {
                           </div>
                         </div>
                         <div className="flex items-center gap-3 shrink-0">
-                          {p.customerId && (
+                          {p.resolvedCustomerId && (
                             <button
                               type="button"
                               onClick={() => {
-                                setPassengerProfileId(p.customerId);
+                                setPassengerProfileId(p.resolvedCustomerId);
                                 setShowCustomerProfile(true);
                               }}
                               className="text-[11px] text-[#c9a84c] font-semibold hover:underline"
@@ -648,7 +663,7 @@ export default function TripDetailsPage() {
                               عرض الملف الشخصي
                             </button>
                           )}
-                          {(p.passengerId || p.customerId) && (
+                          {canEdit && p.resolvedCustomerId && !p.isMain && (
                             <button
                               type="button"
                               onClick={() => setDeletePassenger(p)}
@@ -685,14 +700,18 @@ export default function TripDetailsPage() {
                   التفاصيل المالية
                 </h3>
                 <div className="flex gap-2">
+                  {canEdit && (
                   <button type="button" onClick={() => setShowRefund(true)}
                     className="inline-flex items-center gap-1.5 bg-white border border-gray-200 text-gray-600 text-[11px] font-bold px-3.5 py-2 rounded-xl hover:bg-gray-50 transition-colors">
                     <RefreshCw className="w-3.5 h-3.5" /> معالجة إسترداد
                   </button>
+                  )}
+                  {canAddPayment && (
                   <button type="button" onClick={() => setShowPayment(true)}
                     className="inline-flex items-center gap-1.5 bg-[#4a4746] text-white text-[11px] font-bold px-3.5 py-2 rounded-xl hover:bg-[#383534] transition-colors">
                     <Plus className="w-3.5 h-3.5" /> اضافة دفعة
                   </button>
+                  )}
                 </div>
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
@@ -745,10 +764,12 @@ export default function TripDetailsPage() {
             <div>
               <div className="flex justify-between items-center flex-wrap gap-3 mb-5">
                 <h3 className="font-bold text-gray-800 text-sm">الملاحظات الإدارية</h3>
+                {canEdit && (
                 <button type="button" onClick={() => setShowAddNote(true)}
                   className="flex items-center gap-1.5 bg-white border border-gray-200 text-gray-600 text-[11px] font-bold px-4 py-2 rounded-full hover:bg-gray-50 shadow-sm">
                   <Plus className="w-3.5 h-3.5" /> اضافة ملاحظة
                 </button>
+                )}
               </div>
               <div className="space-y-3">
                 {noteList.length === 0 ? (
@@ -767,9 +788,9 @@ export default function TripDetailsPage() {
         </div>
       </div>
 
-      {/* بطاقات السائق والعميل ومندوب المبيعات */}
+      {/* بطاقات السائق والعميل */}
       {activeTab === "trip" && (
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className={`grid grid-cols-1 gap-4 ${showCustomerCard ? "md:grid-cols-2" : ""}`}>
           <PersonCard
             title="معلومات السائق"
             name={tripHasDriver ? (dName ?? "—") : null}
@@ -777,7 +798,7 @@ export default function TripDetailsPage() {
             emptyMessage={!tripHasDriver ? "لا يوجد سائق مسند لهذه الرحلة" : null}
             profileDisabled={!driverId}
             onProfile={() => driverId && setShowDriverProfile(true)}
-            primaryAction={!tripHasDriver ? (
+            primaryAction={!tripHasDriver && canAssign ? (
               <button
                 type="button"
                 onClick={() => setShowAssignDriver(true)}
@@ -787,20 +808,15 @@ export default function TripDetailsPage() {
               </button>
             ) : null}
           />
-          <PersonCard
-            title="معلومات العميل"
-            name={customerName}
-            phone={customerPhone}
-            profileDisabled={!customerId}
-            onProfile={() => customerId && setShowCustomerProfile(true)}
-          />
-          <PersonCard
-            title="مندوب المبيعات"
-            name={salesName}
-            phone={salesPhone}
-            profileDisabled={!salesId}
-            onProfile={() => salesId && setShowSalesProfile(true)}
-          />
+          {showCustomerCard && (
+            <TripCustomerCard
+              customerId={tripCustomerId}
+              onOpenProfile={() => {
+                setPassengerProfileId(null);
+                setShowCustomerProfile(true);
+              }}
+            />
+          )}
         </div>
       )}
 
@@ -842,17 +858,12 @@ export default function TripDetailsPage() {
           setShowCustomerProfile(false);
           setPassengerProfileId(null);
         }}
-        customerId={passengerProfileId ?? customerId}
+        customerId={passengerProfileId ?? tripCustomerId}
       />
       <DriverProfileModal
         isOpen={showDriverProfile}
         onClose={() => setShowDriverProfile(false)}
         driverId={driverId}
-      />
-      <SalesProfileModal
-        isOpen={showSalesProfile}
-        onClose={() => setShowSalesProfile(false)}
-        salesId={salesId}
       />
       <TripPassengerModal
         isOpen={showPassengerModal}

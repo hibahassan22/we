@@ -419,17 +419,23 @@ function useDriverViolationsData(driverId, refreshKey) {
   return { records, loading, error };
 }
 
-function ViolationRecordCard({ record, index }) {
+function ViolationRecordCard({ record, index, showRating = false }) {
   const type = normalizeViolationType(record.type ?? record.violation_type ?? "تنبيه");
   const info = violationInfo(type);
   const salesName = getViolationSalesName(record);
   const message = record.message ?? record.description ?? record.reason ?? "—";
+  const rating = record.rating != null ? Number(record.rating) : null;
 
   return (
     <div key={record.id || index} className="bg-white border border-gray-100 rounded-2xl px-5 py-4 space-y-1.5">
-      <div className="flex items-center justify-end gap-3">
+      <div className="flex items-center justify-end gap-3 flex-wrap">
+        {showRating && rating != null && !Number.isNaN(rating) && (
+          <StarDisplay value={rating} />
+        )}
         <span className="text-xs text-gray-400">{fmtDate(getViolationDate(record))}</span>
-        <span className={`text-xs font-semibold px-2.5 py-0.5 rounded-full ${info.cls}`}>{type}</span>
+        <span className={`text-xs font-semibold px-2.5 py-0.5 rounded-full ${info.cls}`}>
+          {isNoteRecord(record) ? "ملاحظة" : type}
+        </span>
       </div>
       <p className="text-sm font-semibold text-gray-800 text-right">{message}</p>
       {salesName && (
@@ -487,7 +493,7 @@ function DriverNotesTab({ driverId, refreshKey, onAddNote }) {
       ) : (
         <div className="space-y-3">
           {notes.map((record, index) => (
-            <ViolationRecordCard key={record.id || index} record={record} index={index} />
+            <ViolationRecordCard key={record.id || index} record={record} index={index} showRating />
           ))}
         </div>
       )}
@@ -630,7 +636,7 @@ export default function DriverDetailsView({
   const { can } = usePermissions();
   const canEdit = can(PERMISSIONS.DRIVERS_EDIT);
   const canDelete = can(PERMISSIONS.DRIVERS_DELETE);
-  const canSuspend = can(PERMISSIONS.DRIVERS_SUSPEND);
+  const canChangeStatus = can(PERMISSIONS.DRIVERS_SUSPEND) || can(PERMISSIONS.DRIVERS_EDIT);
 
   const d = normalizeDriverMedia(driver);
   const fullName = [d?.name, d?.last_name].filter(Boolean).join(" ");
@@ -664,7 +670,7 @@ export default function DriverDetailsView({
       <div className="bg-white rounded-2xl p-6 border border-gray-100 shadow-sm flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4">
         <div className="flex flex-wrap gap-1.5 text-xs font-semibold">
           <button type="button" onClick={() => onOpenModal("alert")} className="bg-blue-600 text-white px-3 py-2 rounded-xl">إرسال تنبيه</button>
-          {canSuspend && statuses.map((s) => {
+          {canChangeStatus && statuses.map((s) => {
             const isCurrent = isSameDriverStatus(currentStatusId, s.id);
             return (
               <button
@@ -745,6 +751,15 @@ export default function DriverDetailsView({
               ))}
             </div>
             <div className="space-y-4">
+              <div className="bg-white p-6 rounded-2xl border border-gray-100 shadow-sm space-y-3">
+                <h3 className="text-sm font-bold text-[#c9a84c]">المعلومات المالية</h3>
+                {[["اسم البنك", d?.bank_name], ["صاحب الحساب", d?.account_owner], ["رقم حساب السائق", d?.bank_account_number], ["الآيبان", d?.iban]].map(([label, value]) => (
+                  <div key={label} className="flex justify-between border-b border-gray-50 pb-2 text-sm">
+                    <span className="text-gray-400">{label}</span>
+                    <span className="text-gray-700 font-medium" dir={label === "رقم حساب السائق" || label === "الآيبان" ? "ltr" : undefined}>{value || "—"}</span>
+                  </div>
+                ))}
+              </div>
               <div className="bg-white p-6 rounded-2xl border border-gray-100 shadow-sm space-y-3">
                 <h3 className="text-sm font-bold text-[#c9a84c]">معلومات السيارة</h3>
                 {[["نوع السيارة", d?.car_type], ["موديل السيارة", d?.car_model], ["حجم السيارة", d?.vehicle_size]].map(([label, value]) => (

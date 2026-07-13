@@ -17,6 +17,7 @@ export default function LoginPage() {
     () => location.state?.from?.pathname ?? "/dashboard",
     [location.state?.from?.pathname]
   );
+  const resetSuccess = location.state?.resetSuccess;
 
   useEffect(() => {
     if (!isLoaded || !isSignedIn) return;
@@ -30,6 +31,7 @@ export default function LoginPage() {
       setError("يرجى إدخال البريد الإلكتروني وكلمة المرور");
       return;
     }
+
     setLoading(true);
     try {
       await login(email, password);
@@ -56,6 +58,12 @@ export default function LoginPage() {
 
         <div className="bg-white rounded-2xl shadow-lg border border-gray-100 p-7">
           <h2 className="text-base font-bold text-gray-800 mb-5">تسجيل الدخول</h2>
+
+          {resetSuccess && (
+            <div className="bg-green-50 border border-green-200 text-green-700 text-xs rounded-xl px-3 py-2.5 text-right mb-4">
+              تم تغيير كلمة المرور بنجاح — سجّل دخولك الآن
+            </div>
+          )}
 
           {error && (
             <div className="bg-red-50 border border-red-200 text-red-600 text-xs rounded-xl px-3 py-2.5 text-right mb-4">

@@ -104,7 +104,67 @@ export function normalizeSaudiPhoneFromApi(phone) {
   return sanitizePhoneInput(digits);
 }
 
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+/** إدخال جوال: 10 أرقام تبدأ بـ 5 بدون صفر في البداية (مع +966) */
+export function sanitizePhoneInputFiveStart(value) {
+  let digits = String(value ?? "").replace(/\D/g, "");
+  if (digits.startsWith("0")) digits = digits.slice(1);
+  if (digits.length > 0 && digits[0] !== "5") {
+    const idx = digits.indexOf("5");
+    digits = idx >= 0 ? digits.slice(idx) : "";
+  }
+  return digits.slice(0, SAUDI_PHONE_MAX_LEN);
+}
+
+/** تحقق: 10 أرقام تبدأ بـ 5 — الرقم الأول ليس صفراً */
+export function validatePhoneTenDigitsFiveStart(phone) {
+  const digits = sanitizePhoneInputFiveStart(phone);
+
+  if (!digits) {
+    return { valid: false, message: "رقم الهاتف مطلوب" };
+  }
+
+  if (!digits.startsWith("5")) {
+    return { valid: false, message: "رقم الجوال يجب أن يبدأ بـ 5" };
+  }
+
+  if (digits.length !== SAUDI_PHONE_MAX_LEN) {
+    return { valid: false, message: `رقم الهاتف يجب أن يكون ${SAUDI_PHONE_MAX_LEN} أرقام` };
+  }
+
+  return { valid: true, normalized: `0${digits}` };
+}
+
+/** يحوّل رقم API إلى صيغة العرض (10 أرقام تبدأ بـ 5 بدون صفر) */
+export function normalizeSaudiPhoneForInputFiveStart(phone) {
+  let digits = String(phone ?? "").replace(/\D/g, "");
+  if (digits.startsWith("966")) digits = digits.slice(3);
+  if (digits.startsWith("0")) digits = digits.slice(1);
+  return sanitizePhoneInputFiveStart(digits);
+}
+
+/** يحوّل رقم الهاتف لصيغة API (أرقام فقط مع كود الدولة — مثل 966501234567) */
+export function normalizePhoneForOtp(phone) {
+  let digits = String(phone ?? "").replace(/\D/g, "");
+  if (!digits) return "";
+
+  if (digits.startsWith("05") && digits.length === 10) {
+    return `966${digits.slice(1)}`;
+  }
+  if (digits.startsWith("5") && digits.length === 9) {
+    return `966${digits}`;
+  }
+  if (digits.startsWith("0") && digits.length > 10) {
+    return digits.slice(1);
+  }
+  return digits;
+}
+
+/** إخفاء جزء من الرقم للعرض */
+export function maskPhone(phone) {
+  const digits = String(phone ?? "").replace(/\D/g, "");
+  if (digits.length < 4) return digits;
+  return `••••${digits.slice(-4)}`;
+}
 
 export function validateEmail(email) {
   const value = String(email ?? "").trim();

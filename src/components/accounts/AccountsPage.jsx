@@ -2,9 +2,12 @@ import { useState, useEffect, useCallback, useMemo } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useGlobalSearch } from "../../hooks/useGlobalSearch";
 import { filterByGlobalSearch } from "../../lib/searchUtils";
-import { fetchAccountsSummary, extractTripPayments } from "../../services/accountsService";
+import { fetchAccountsSummary, fetchMonthlyReport } from "../../services/accountsService";
+import { fetchApprovedPayments, normalizeApprovedPayment } from "../../services/paymentRequestService.js";
 import { fetchAllRefunds } from "../../services/refundService";
 import RefundHandleModal from "../approvals/RefundHandleModal";
+import { exportToExcel } from "../../lib/exportExcel.js";
+import { useToast } from "../../lib/toast.jsx";
 
 const BASE = "https://drivo1.elmoroj.com/api";
 
@@ -26,9 +29,7 @@ const fmtDate = (v) => {
   return Number.isNaN(d.getTime()) ? "—" : d.toLocaleDateString("en-GB");
 };
 
-const pctChange = () => "+18%";
-
-function SummaryCard({ label, value, icon, trendColor = "text-green-500" }) {
+function SummaryCard({ label, value, icon }) {
   return (
     <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4 flex items-center justify-between gap-3">
       <div
@@ -40,7 +41,6 @@ function SummaryCard({ label, value, icon, trendColor = "text-green-500" }) {
       <div className="text-right flex-1 min-w-0">
         <p className="text-[11px] text-gray-400">{label}</p>
         <p className="text-xl font-extrabold text-gray-800 mt-0.5">{fmtMoney(value)} <span className="text-xs font-normal text-gray-400">ر.س</span></p>
-        <p className={`text-[10px] mt-1 ${trendColor}`}>{pctChange()} عن الشهر الماضي</p>
       </div>
     </div>
   );
@@ -67,42 +67,100 @@ function TabBar({ active, onChange }) {
   );
 }
 
+function PaymentCard({ p }) {
+  const [showProof, setShowProof] = useState(false);
+
+  return (
+    <div className="bg-white border border-gray-100 rounded-2xl p-4">
+      <div className="flex flex-col sm:flex-row sm:items-start gap-4">
+        <div className="flex-1 text-right space-y-2 min-w-0">
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-green-100 text-green-600">
+              معتمدة
+            </span>
+            <span className="text-xs text-gray-400">#{p.id}</span>
+          </div>
+          <p className="text-sm font-bold text-gray-800">رحلة #{p.tripId} — السائق: {p.driverName}</p>
+          <div className="space-y-1 text-xs text-gray-600">
+            <p>
+              <span className="text-gray-400">المبلغ: </span>
+              <span className="font-semibold text-gray-800">{fmtMoney(p.amount)} ر.س</span>
+            </p>
+            <p>
+              <span className="text-gray-400">تاريخ الدفع: </span>
+              {p.paymentDate ? fmtDate(p.paymentDate) : "—"}
+            </p>
+            <p>
+              <span className="text-gray-400">طريقة التحويل: </span>
+              {p.transferMethod || "—"}
+            </p>
+            <p dir="ltr" className="text-right">
+              <span className="text-gray-400">من: </span>
+              {p.fromAccount || "—"}
+            </p>
+            <p dir="ltr" className="text-right">
+              <span className="text-gray-400">إلى: </span>
+              {p.toAccount || "—"}
+            </p>
+            {p.notes && (
+              <p>
+                <span className="text-gray-400">ملاحظات: </span>
+                {p.notes}
+              </p>
+            )}
+          </div>
+        </div>
+
+        {p.transferImage && (
+          <div className="shrink-0 flex flex-col items-end sm:items-start gap-2">
+            {!showProof ? (
+              <button
+                type="button"
+                onClick={() => setShowProof(true)}
+                className="text-xs font-semibold text-[#9C6402] hover:text-[#7a4f02] underline underline-offset-2"
+              >
+                صورة إثبات
+              </button>
+            ) : (
+              <div className="space-y-2 text-right">
+                <a
+                  href={p.transferImage}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="block"
+                >
+                  <img
+                    src={p.transferImage}
+                    alt="إثبات التحويل"
+                    className="max-h-32 max-w-[160px] rounded-lg border border-gray-200 object-contain"
+                  />
+                </a>
+                <button
+                  type="button"
+                  onClick={() => setShowProof(false)}
+                  className="text-[10px] text-gray-400 hover:text-gray-600"
+                >
+                  إخفاء الصورة
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function PaymentsTab({ payments, loading }) {
   if (loading) return <LoadingBlock />;
   if (!payments.length) {
-    return <EmptyBlock text="لا توجد دفعات مسجّلة حالياً" />;
+    return <EmptyBlock text="لا توجد دفعات معتمدة حالياً" />;
   }
 
   return (
     <div className="space-y-3">
       {payments.map((p) => (
-        <div key={p.id} className="bg-white border border-gray-100 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center gap-4">
-          <button
-            type="button"
-            className="flex items-center justify-center gap-2 bg-[#4a4644] hover:bg-black text-white text-sm font-bold px-5 py-2.5 rounded-xl shrink-0"
-          >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
-            </svg>
-            مراجعة
-          </button>
-          <div className="flex-1 text-right space-y-2 min-w-0">
-            <div className="flex flex-wrap items-center justify-end gap-2">
-              <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${p.registered ? "bg-green-100 text-green-600" : "bg-amber-100 text-amber-600"}`}>
-                {p.registered ? "مسجّل" : "غير مسجّل"}
-              </span>
-              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-gray-100 text-gray-500">قيد المراجعة</span>
-            </div>
-            <p className="text-sm font-bold text-gray-800">{p.customerName}</p>
-            <p className="text-xs text-gray-500">سبب الدفعة: {p.note || "—"}</p>
-            <div className="flex flex-wrap items-center justify-end gap-3 text-xs text-gray-400">
-              <span>{fmtMoney(p.amount)} ر.س</span>
-              <span>{p.date ? fmtDate(p.date) : "—"}</span>
-              <span dir="ltr">{p.phone}</span>
-            </div>
-          </div>
-        </div>
+        <PaymentCard key={p.id} p={p} />
       ))}
     </div>
   );
@@ -206,11 +264,6 @@ function ExpensesTab({ expenses, loading, onRefresh }) {
   const [form, setForm] = useState({ type: "", amount_sar: "", amount_egp: "", expense_date: "", description: "" });
   const [saving, setSaving] = useState(false);
 
-  const totalMonth = expenses.reduce((s, e) => s + (Number(e.amount_sar) || 0), 0);
-  const opening = 2324;
-  const carried = 1670;
-  const remaining = Math.max(0, opening - totalMonth);
-
   const handleAdd = async () => {
     if (!form.type.trim()) return;
     setSaving(true);
@@ -241,25 +294,6 @@ function ExpensesTab({ expenses, loading, onRefresh }) {
 
   return (
     <div className="space-y-4">
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-        {[
-          { label: "الرصيد الافتتاحي (العهدة)", value: opening, sub: "ر.س" },
-          { label: "المرحل للشهر القادم", value: carried, sub: "ر.س" },
-          { label: "المصروفات خلال هذا الشهر", value: totalMonth, sub: "ر.س", bar: true, barPct: Math.min(100, (totalMonth / opening) * 100), barColor: "bg-red-400" },
-          { label: "المتبقي", value: remaining, sub: "ر.س", bar: true, barPct: Math.min(100, (remaining / opening) * 100), barColor: "bg-green-400" },
-        ].map((c) => (
-          <div key={c.label} className="bg-white border border-gray-100 rounded-2xl p-4 text-right">
-            <p className="text-[11px] text-gray-400">{c.label}</p>
-            <p className="text-lg font-extrabold text-gray-800 mt-1">{fmtMoney(c.value)} <span className="text-xs font-normal">{c.sub}</span></p>
-            {c.bar && (
-              <div className="h-1.5 bg-gray-100 rounded-full mt-3 overflow-hidden">
-                <div className={`h-full rounded-full ${c.barColor}`} style={{ width: `${c.barPct}%` }} />
-              </div>
-            )}
-          </div>
-        ))}
-      </div>
-
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <button
           type="button"
@@ -343,25 +377,34 @@ function EmptyBlock({ text }) {
 export default function AccountsPage() {
   const navigate = useNavigate();
   const { tab: tabParam } = useParams();
-  const activeTab = TABS.some((t) => t.id === tabParam) ? tabParam : "employees";
+  const activeTab = TABS.some((t) => t.id === tabParam) ? tabParam : "payments";
   const { searchQuery } = useGlobalSearch();
+  const toast = useToast();
 
   const [loading, setLoading] = useState(true);
   const [summary, setSummary] = useState(null);
+  const [monthlyReport, setMonthlyReport] = useState(null);
   const [refunds, setRefunds] = useState([]);
+  const [approvedPayments, setApprovedPayments] = useState([]);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [data, refundsData] = await Promise.all([
+      const [data, report, refundsData, paymentsData] = await Promise.all([
         fetchAccountsSummary(),
+        fetchMonthlyReport().catch(() => null),
         fetchAllRefunds().catch(() => []),
+        fetchApprovedPayments().catch(() => []),
       ]);
       setSummary(data);
+      setMonthlyReport(report);
       setRefunds(refundsData);
+      setApprovedPayments(paymentsData.map(normalizeApprovedPayment));
     } catch {
       setSummary(null);
+      setMonthlyReport(null);
       setRefunds([]);
+      setApprovedPayments([]);
     } finally {
       setLoading(false);
     }
@@ -371,13 +414,11 @@ export default function AccountsPage() {
     load();
   }, [load]);
 
-  const payments = useMemo(
-    () => extractTripPayments(summary?.trips ?? []),
-    [summary?.trips]
-  );
+  const payments = useMemo(() => approvedPayments, [approvedPayments]);
 
   const filteredPayments = filterByGlobalSearch(payments, searchQuery, (p) => [
-    p.customerName, p.phone, p.note, String(p.amount),
+    p.driverName, p.notes, String(p.amount), String(p.tripId),
+    p.fromAccount, p.toAccount, p.transferMethod,
   ]);
   const filteredSales = filterByGlobalSearch(summary?.sales ?? [], searchQuery, (s) => [
     s.name, s.phone, s.email,
@@ -389,6 +430,71 @@ export default function AccountsPage() {
     e.type, e.description,
   ]);
 
+  const handleExport = () => {
+    let rows = [];
+    let filename = "الحسابات";
+
+    if (activeTab === "payments") {
+      filename = "الدفعات";
+      rows = filteredPayments.map((p) => ({
+        "رقم الدفعة": p.id ?? "—",
+        "رقم الرحلة": p.tripId ?? "—",
+        "السائق": p.driverName ?? "—",
+        "المبلغ (ر.س)": p.amount ?? 0,
+        "تاريخ الدفع": p.paymentDate ? fmtDate(p.paymentDate) : "—",
+        "طريقة التحويل": p.transferMethod || "—",
+        "من حساب": p.fromAccount || "—",
+        "إلى حساب": p.toAccount || "—",
+        "ملاحظات": p.notes || "—",
+        "الحالة": "معتمدة",
+      }));
+    } else if (activeTab === "employees") {
+      filename = "الموظفين";
+      rows = filteredSales.map((s) => {
+        const target = Number(s.target ?? s.admin_target ?? 0);
+        const mainTarget = Number(s.main_target ?? 0) || 1;
+        const pct = Math.min(100, Math.round((target / mainTarget) * 100)) || 0;
+        return {
+          "الاسم": s.name ?? "—",
+          "الهاتف": s.phone ?? "—",
+          "البريد": s.email ?? "—",
+          "إجمالي المدخلات": target,
+          "الربح": target * 0.35,
+          "الصافي": target * 0.4,
+          "نسبة الهدف": `${pct}%`,
+        };
+      });
+    } else if (activeTab === "refunds") {
+      filename = "الاستردادات";
+      rows = filteredRefunds.map((r) => {
+        const status = String(r.status ?? "pending").toLowerCase();
+        const pending = status === "pending" || status === "معلق";
+        return {
+          "رقم الرحلة": r.tripId ?? r.trip_id ?? "—",
+          "المبلغ المقترح (ر.س)": r.proposed_refund_amount ?? r.proposedAmount ?? "—",
+          "السبب": r.refund_reason ?? r.reason ?? "—",
+          "الحالة": pending ? "معلق" : "تمت المعالجة",
+        };
+      });
+    } else if (activeTab === "expenses") {
+      filename = "المصروفات";
+      rows = filteredExpenses.map((e) => ({
+        "النوع": e.type ?? "—",
+        "المبلغ (ريال)": e.amount_sar ?? 0,
+        "المبلغ (جنية)": e.amount_egp ?? 0,
+        "التاريخ": e.expense_date ?? "—",
+        "الوصف": e.description || "—",
+      }));
+    }
+
+    try {
+      exportToExcel(rows, filename);
+      toast.success("تم تصدير البيانات بنجاح");
+    } catch (err) {
+      toast.error(err.message || "فشل التصدير");
+    }
+  };
+
   return (
     <div className="space-y-5" dir="rtl">
       <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 text-right">
@@ -397,10 +503,7 @@ export default function AccountsPage() {
           <p className="text-xs text-gray-400 mt-0.5">نظام شامل لإدارة الوارد والمصروفات والموظفين</p>
         </div>
         <div className="flex gap-2 shrink-0">
-          <button type="button" className="px-4 py-2 border border-gray-200 rounded-xl text-sm font-medium text-gray-600 bg-white hover:bg-gray-50">
-            تصفية
-          </button>
-          <button type="button" className="px-4 py-2 bg-[#c9a84c] hover:bg-[#b8973d] rounded-xl text-sm font-bold text-white">
+          <button type="button" onClick={handleExport} className="px-4 py-2 bg-[#c9a84c] hover:bg-[#b8973d] rounded-xl text-sm font-bold text-white">
             تصدير
           </button>
         </div>
@@ -409,24 +512,22 @@ export default function AccountsPage() {
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
         <SummaryCard
           label="إجمالي الوارد"
-          value={summary?.totalIncome ?? 0}
+          value={monthlyReport?.totalIncome ?? summary?.totalIncome ?? 0}
           icon={<svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>}
         />
         <SummaryCard
           label="إجمالي المصروفات"
-          value={summary?.totalExpenses ?? 0}
-          trendColor="text-red-500"
+          value={monthlyReport?.totalExpenses ?? summary?.totalExpenses ?? 0}
           icon={<svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z" /></svg>}
         />
         <SummaryCard
           label="إجمالي الاسترجاعات"
-          value={summary?.totalRefunds ?? 0}
-          trendColor="text-teal-500"
+          value={monthlyReport?.totalRefunds ?? summary?.totalRefunds ?? 0}
           icon={<svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" /></svg>}
         />
         <SummaryCard
           label="صافي الربح"
-          value={summary?.netProfit ?? 0}
+          value={monthlyReport?.netProfit ?? summary?.netProfit ?? 0}
           icon={<svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" /></svg>}
         />
       </div>

@@ -4,28 +4,75 @@ import { filterByGlobalSearch } from "../lib/searchUtils";
 import { useToast } from "../lib/toast.jsx";
 import { usePermissions } from "../hooks/usePermissions.js";
 import { PERMISSIONS } from "../lib/permissions.js";
-import {
-  fetchRoles,
-  createRole,
-  deleteRole,
-  formatRoleDate,
-  isProtectedRole,
-} from "../services/roleService.js";
+import { fetchRoles, createRole, deleteRole, formatRoleDate, isProtectedRole, findAdminRole } from "../services/roleService.js";
+import { grantAllPermissionsToRole } from "../services/permissionService.js";
 import { ConfirmModal } from "./ui/AppModal";
 import RolePermissionsModal from "./permissions/RolePermissionsModal.jsx";
+import EditRoleModal from "./permissions/EditRoleModal.jsx";
+
+function RoleActions({ role, onEdit, onDelete, onViewPerms, onGrantAll, granting }) {
+  const protectedRole = isProtectedRole(role);
+  return (
+    <div className="flex items-center justify-center gap-2 flex-wrap">
+      <button
+        type="button"
+        onClick={onViewPerms}
+        className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-medium text-[#9C6402] bg-[#faf7f0] border border-amber-100 hover:bg-amber-50 transition-colors"
+        title="عرض الصلاحيات"
+      >
+        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg>
+        الصلاحيات
+      </button>
+      {!protectedRole && (
+        <button
+          type="button"
+          onClick={onGrantAll}
+          disabled={granting}
+          className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-medium text-green-700 bg-green-50 border border-green-100 hover:bg-green-100 transition-colors disabled:opacity-50"
+          title="تفعيل كل الصلاحيات لهذا الدور"
+        >
+          تفعيل الكل
+        </button>
+      )}
+      <button
+        type="button"
+        onClick={onEdit}
+        disabled={protectedRole}
+        className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-medium text-blue-600 bg-blue-50 border border-blue-100 hover:bg-blue-100 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+        title="تعديل الدور"
+      >
+        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>
+        تعديل
+      </button>
+      <button
+        type="button"
+        onClick={onDelete}
+        disabled={protectedRole}
+        className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-medium text-red-600 bg-red-50 border border-red-100 hover:bg-red-100 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+        title="حذف الدور"
+      >
+        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+        حذف
+      </button>
+    </div>
+  );
+}
 
 export default function PermissionsPage() {
   const toast = useToast();
-  const { can, canAny } = usePermissions();
+  const { can } = usePermissions();
   const canManageRoles = can(PERMISSIONS.ROLES_EDIT);
-  const canViewPermissions = canAny([PERMISSIONS.PERMISSIONS_READ, PERMISSIONS.ROLES_READ]);
   const canEditPermissions = can(PERMISSIONS.PERMISSIONS_EDIT);
   const [roles, setRoles] = useState([]);
   const [rolesLoading, setRolesLoading] = useState(true);
   const [addingRole, setAddingRole] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState(null);
+  const [editTarget, setEditTarget] = useState(null);
   const [deleting, setDeleting] = useState(false);
   const [permRole, setPermRole] = useState(null);
+  const [grantingAdmin, setGrantingAdmin] = useState(false);
+  const [grantTarget, setGrantTarget] = useState(null);
+  const [grantingRole, setGrantingRole] = useState(false);
 
   const [roleName, setRoleName] = useState("");
   const [roleDesc, setRoleDesc] = useState("");
@@ -94,6 +141,40 @@ export default function PermissionsPage() {
     return count;
   };
 
+  const handleGrantRoleAll = async (role) => {
+    if (!role || isProtectedRole(role)) return;
+    setGrantTarget(role);
+    setGrantingRole(true);
+    try {
+      const count = await grantAllPermissionsToRole(role.id);
+      toast.success(`تم تفعيل ${count} صلاحية لدور «${role.name}»`);
+      await loadRoles();
+    } catch (err) {
+      toast.error(err.message || "فشل منح الصلاحيات");
+    } finally {
+      setGrantingRole(false);
+      setGrantTarget(null);
+    }
+  };
+
+  const handleGrantAdminAll = async () => {
+    const adminRole = findAdminRole(roles);
+    if (!adminRole) {
+      toast.error("لم يُعثر على دور ادمن — أنشئ دوراً باسم Admin أو ادمن");
+      return;
+    }
+    setGrantingAdmin(true);
+    try {
+      const count = await grantAllPermissionsToRole(adminRole.id);
+      toast.success(`تم تفعيل ${count} صلاحية لدور «${adminRole.name}»`);
+      await loadRoles();
+    } catch (err) {
+      toast.error(err.message || "فشل منح الصلاحيات للادمن");
+    } finally {
+      setGrantingAdmin(false);
+    }
+  };
+
   return (
     <div className="w-full space-y-5" dir="rtl">
 
@@ -141,9 +222,24 @@ export default function PermissionsPage() {
       </form>
 
       <div className="bg-white rounded-2xl shadow-sm p-5 space-y-4">
-        <div className="flex items-center justify-between">
-          <span className="text-xs text-gray-400">{roles.length} دور</span>
-          <h2 className="text-base font-semibold text-gray-800">سجل الأدوار</h2>
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <div className="flex items-center gap-2 flex-wrap">
+            {canEditPermissions && (
+              <button
+                type="button"
+                onClick={handleGrantAdminAll}
+                disabled={grantingAdmin || rolesLoading}
+                className="text-xs px-3 py-2 rounded-lg border border-amber-200 text-amber-800 hover:bg-amber-50 disabled:opacity-60 font-medium"
+              >
+                {grantingAdmin ? "جارٍ التفعيل..." : "تفعيل كل الصلاحيات للادمن"}
+              </button>
+            )}
+            <span className="text-xs text-gray-400">{roles.length} دور</span>
+          </div>
+          <div className="text-right">
+            <h2 className="text-base font-semibold text-gray-800">سجل الأدوار</h2>
+            <p className="text-[11px] text-gray-400 mt-0.5">كل دور (Sales أو غيره) يحصل فقط على ما تفعّله له من صلاحيات</p>
+          </div>
         </div>
 
         <input
@@ -178,29 +274,25 @@ export default function PermissionsPage() {
                       <p className="font-semibold text-gray-800">{role.name}</p>
                       {role.description && <p className="text-xs text-gray-400">{role.description}</p>}
                     </td>
-                    <td className="px-4 py-3 text-center text-gray-600">{permCount(role)}</td>
+                    <td className="px-4 py-3 text-center">
+                      <button
+                        type="button"
+                        onClick={() => setPermRole(role)}
+                        className="text-[#c9a84c] font-medium hover:underline text-sm"
+                      >
+                        {permCount(role)}
+                      </button>
+                    </td>
                     <td className="px-4 py-3 text-center text-xs text-gray-400">{formatRoleDate(role.createdAt)}</td>
                     <td className="px-4 py-3">
-                      <div className="flex items-center justify-center gap-3">
-                        {canViewPermissions && (
-                        <button
-                          type="button"
-                          onClick={() => setPermRole(role)}
-                          className="text-xs text-[#c9a84c] font-medium hover:underline"
-                        >
-                          عرض الصلاحيات
-                        </button>
-                        )}
-                        {canManageRoles && !isProtectedRole(role) && (
-                          <button
-                            type="button"
-                            onClick={() => setDeleteTarget(role)}
-                            className="text-xs text-red-500 hover:underline"
-                          >
-                            حذف
-                          </button>
-                        )}
-                      </div>
+                      <RoleActions
+                        role={role}
+                        onEdit={() => setEditTarget(role)}
+                        onDelete={() => setDeleteTarget(role)}
+                        onViewPerms={() => setPermRole(role)}
+                        onGrantAll={() => handleGrantRoleAll(role)}
+                        granting={grantingRole && grantTarget?.id === role.id}
+                      />
                     </td>
                   </tr>
                 ))}
@@ -209,6 +301,13 @@ export default function PermissionsPage() {
           </div>
         )}
       </div>
+
+      <EditRoleModal
+        isOpen={!!editTarget}
+        onClose={() => setEditTarget(null)}
+        role={editTarget}
+        onSaved={loadRoles}
+      />
 
       <RolePermissionsModal
         isOpen={!!permRole}
