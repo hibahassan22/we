@@ -71,7 +71,7 @@ function useOfferedTrips() {
 export default function CreateTripPage() {
   const navigate = useNavigate();
   const { trips, setTrips, loading, error, retry } = useOfferedTrips();
-  const [assignModal, setAssignModal] = useState({ open: false, tripId: null });
+  const [assignModal, setAssignModal] = useState({ open: false, tripId: null, tripTotalPrice: "" });
   const [chatModal, setChatModal] = useState({ open: false, tripId: null, tripLabel: "" });
   const [editModal, setEditModal] = useState({ open: false, trip: null });
   const [deleteModal, setDeleteModal] = useState({ open: false, trip: null });
@@ -318,7 +318,7 @@ export default function CreateTripPage() {
                 {canAssign && (
                   <button
                     type="button"
-                    onClick={() => setAssignModal({ open: true, tripId: trip.id })}
+                    onClick={() => setAssignModal({ open: true, tripId: trip.id, tripTotalPrice: trip.total_price ?? trip.price ?? "" })}
                     className="flex items-center justify-center gap-1 bg-[#474747] text-white text-xs py-1.5 px-3 rounded hover:bg-black transition-colors"
                   >
                     <Plus className="w-3.5 h-3.5" /> إسناد رحلة
@@ -379,7 +379,8 @@ export default function CreateTripPage() {
       <AssignTripModal
         isOpen={assignModal.open}
         tripId={assignModal.tripId}
-        onClose={() => setAssignModal({ open: false, tripId: null })}
+        tripTotalPrice={assignModal.tripTotalPrice}
+        onClose={() => setAssignModal({ open: false, tripId: null, tripTotalPrice: "" })}
         onSuccess={(result) => {
           const tripId = assignModal.tripId;
           const driverId = result?.driver_id ?? result?.data?.driver_id;

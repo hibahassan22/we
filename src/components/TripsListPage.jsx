@@ -97,7 +97,7 @@ function TripTypeTabs({ active, onChange, driverCount, offeredCount, showDriver,
 const TripsLog = () => {
     const location = useLocation();
     const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
-    const [assignModal, setAssignModal] = useState({ open: false, tripId: null });
+    const [assignModal, setAssignModal] = useState({ open: false, tripId: null, tripTotalPrice: "" });
     const [chatModal, setChatModal] = useState({ open: false, tripId: null, tripLabel: "" });
     const [deleteModal, setDeleteModal] = useState({ open: false, trip: null });
     const [isDeletingTrip, setIsDeletingTrip] = useState(false);
@@ -386,7 +386,7 @@ const TripsLog = () => {
                             {canOfferedAssign && (
                                 <button
                                     type="button"
-                                    onClick={() => setAssignModal({ open: true, tripId: trip.id })}
+                                    onClick={() => setAssignModal({ open: true, tripId: trip.id, tripTotalPrice: trip.total_price ?? trip.price ?? "" })}
                                     className="flex items-center justify-center gap-1 bg-[#474747] text-white text-xs py-1.5 px-3 rounded hover:bg-black transition-colors"
                                 >
                                     <Plus className="w-3.5 h-3.5" /> إسناد رحلة
@@ -588,12 +588,13 @@ const TripsLog = () => {
             <AssignTripModal
                 isOpen={assignModal.open}
                 tripId={assignModal.tripId}
-                onClose={() => setAssignModal({ open: false, tripId: null })}
+                tripTotalPrice={assignModal.tripTotalPrice}
+                onClose={() => setAssignModal({ open: false, tripId: null, tripTotalPrice: "" })}
                 onSuccess={(result) => {
                     const tripId = assignModal.tripId;
                     const driverId = result?.driver_id ?? result?.data?.driver_id;
                     const driver = result?.driver ?? result?.data?.driver;
-                    setAssignModal({ open: false, tripId: null });
+                    setAssignModal({ open: false, tripId: null, tripTotalPrice: "" });
                     setDriverStatusMap((prev) => ({ ...prev, [String(tripId)]: true }));
                     setOfferedTrips((prev) => prev.map((t) => {
                         if (String(t.id) !== String(tripId)) return t;

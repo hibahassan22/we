@@ -6,6 +6,7 @@ const ROUTE_LABELS = {
   "/create-trip":   { label: "إنشاء رحلة",        icon: "➕" },
   "/clients":       { label: "العملاء",             icon: "👥" },
   "/drivers":       { label: "السائقين",            icon: "🚗" },
+  "/brokers":       { label: "إدارة الوسطاء",      icon: "🤝" },
   "/rewards":       { label: "إدارة المكافآت",    icon: "🎁" },
   "/support":       { label: "الدعم الفني",        icon: "🎧" },
   "/notifications": { label: "إدارة الاشعارات",   icon: "🔔" },

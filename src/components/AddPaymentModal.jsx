@@ -15,13 +15,15 @@ const readOnlyInputClass = `${modalInputClass} bg-gray-50 text-gray-600 cursor-n
 const createEmptyForm = (totalPrice = "") => ({
   total_price: totalPrice,
   amount_paid: "",
-  transfer_method: "تحويل بنكي",
-  account_number: "",
-  recipient_type: "غير",
+  recipient_type: "",
+  transfer_method: "",
   driver_id: "",
   sender_driver_id: "",
   recipient_driver_id: "",
+  recipient_mode: "",
   cash_recipient_name: "",
+  custom_sender_name: "",
+  account_number: "",
   recipient_account: "",
   bank_id: "",
   bank_name: "",
@@ -34,8 +36,17 @@ function getDriverName(driver) {
   return [driver?.name, driver?.last_name].filter(Boolean).join(" ").trim() || "—";
 }
 
-function getDriverAccount(driver) {
-  return getDriverBankAccount(driver);
+function getDriverPhone(driver) {
+  return String(driver?.phone ?? "").trim();
+}
+
+function matchesDriverSearch(driver, query) {
+  const q = query.trim().toLowerCase();
+  if (!q) return true;
+  const name = getDriverName(driver).toLowerCase();
+  const phone = getDriverPhone(driver).replace(/\s/g, "");
+  const qDigits = q.replace(/\s/g, "");
+  return name.includes(q) || (qDigits && phone.includes(qDigits));
 }
 
 function DriverSearchSelect({
@@ -44,7 +55,7 @@ function DriverSearchSelect({
   onChange,
   loading,
   disabled,
-  placeholder = "ابحث عن سائق...",
+  placeholder = "ابحث بالاسم أو الرقم...",
   canAddDriver = false,
   onAddDriver,
 }) {
@@ -68,11 +79,8 @@ function DriverSearchSelect({
   }, [selected, selectedLabel, open]);
 
   const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    if (!q || (selected && query === selectedLabel)) {
-      return drivers;
-    }
-    return drivers.filter((d) => getDriverName(d).toLowerCase().includes(q));
+    if (selected && query === selectedLabel) return drivers;
+    return drivers.filter((d) => matchesDriverSearch(d, query));
   }, [drivers, query, selected, selectedLabel]);
 
   const isSearching = query.trim().length > 0 && (!selected || query !== selectedLabel);
@@ -140,7 +148,12 @@ function DriverSearchSelect({
                       String(driver.id) === String(value) ? "bg-amber-50 text-[#c9a84c] font-medium" : "text-gray-700"
                     }`}
                   >
-                    {getDriverName(driver)}
+                    <span className="block">{getDriverName(driver)}</span>
+                    {getDriverPhone(driver) && (
+                      <span className="block text-[11px] text-gray-400 mt-0.5" dir="ltr">
+                        {getDriverPhone(driver)}
+                      </span>
+                    )}
                   </button>
                 </li>
               ))
@@ -164,8 +177,43 @@ function DriverSearchSelect({
   );
 }
 
+function DateField({ value, onChange, disabled }) {
+  const inputRef = useRef(null);
+
+  const openPicker = (e) => {
+    if (disabled) return;
+    const el = inputRef.current;
+    if (!el) return;
+    try {
+      el.showPicker?.();
+    } catch {
+      /* fallback: native date input still works on focus */
+    }
+    if (e?.target !== el) el.focus();
+  };
+
+  return (
+    <div className="relative" onClick={openPicker}>
+      <input
+        ref={inputRef}
+        type="date"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        disabled={disabled}
+        className={`${modalInputClass} cursor-pointer`}
+      />
+    </div>
+  );
+}
+
 /**
  * AddPaymentModal — إضافة دفعة لرحلة من سجل الرحلات
+ *
+ * التدفق:
+ * 1. السعر الكلي (من الرحلة، قابل للتعديل) + المبلغ المدفوع
+ * 2. نوع المستلم: حسابنا | غير
+ * 3. لو حسابنا → طريقة الدفع: تحويل بنكي | كاش | بوابة دفع
+ * 4. تحويل بنكي → تاريخ + اسم المرسل (بحث سائق) + بنك مستلم + ملاحظات
  */
 export default function AddPaymentModal({ isOpen, onClose, tripId, tripTotalPrice, onSuccess }) {
   const { can } = usePermissions();
@@ -177,12 +225,16 @@ export default function AddPaymentModal({ isOpen, onClose, tripId, tripTotalPric
   const [banks, setBanks] = useState([]);
   const [driversLoading, setDriversLoading] = useState(false);
   const [banksLoading, setBanksLoading] = useState(false);
-  const [assignedDriver, setAssignedDriver] = useState(null);
   const [showAddDriver, setShowAddDriver] = useState(false);
-  const [pendingDriverSelect, setPendingDriverSelect] = useState(null);
+  const [useOtherSender, setUseOtherSender] = useState(false);
+  const [assignedDriver, setAssignedDriver] = useState(null);
+  const pendingDriverSelectRef = useRef(null);
   const wasOpenRef = useRef(false);
 
-  const isCash = formData.transfer_method === "كاش";
+  const isOurAccount = formData.recipient_type === "حسابنا";
+  const isBankTransfer = isOurAccount && formData.transfer_method === "تحويل بنكي";
+  const isCash = isOurAccount && formData.transfer_method === "كاش";
+  const isPaymentGateway = isOurAccount && formData.transfer_method === "بوابة دفع";
 
   const loadDrivers = useCallback(async (signal) => {
     setDriversLoading(true);
@@ -209,11 +261,20 @@ export default function AddPaymentModal({ isOpen, onClose, tripId, tripTotalPric
     if (tripId) {
       fetchTripDetailsById(tripId)
         .then(({ trip }) => {
+          const price = trip?.total_price ?? trip?.price ?? tripTotalPrice;
           const driver = trip?.driver ?? null;
           const driverId = driver?.id ?? trip?.driver_id ?? null;
           if (driver || driverId) {
             setAssignedDriver(driver ?? { id: driverId });
+          } else {
+            setAssignedDriver(null);
           }
+          setFormData((p) => ({
+            ...p,
+            total_price: p.total_price || (price != null && price !== "" ? String(price) : ""),
+            sender_driver_id:
+              p.sender_driver_id || (driverId != null ? String(driverId) : ""),
+          }));
         })
         .catch(() => setAssignedDriver(null));
     } else {
@@ -221,22 +282,34 @@ export default function AddPaymentModal({ isOpen, onClose, tripId, tripTotalPric
     }
 
     return () => ctrl.abort();
-  }, [isOpen, tripId, loadDrivers]);
+  }, [isOpen, tripId, loadDrivers, tripTotalPrice]);
 
-  const tripDriverAccount = useMemo(() => {
-    if (!assignedDriver) return "";
-    const fromList = drivers.find((d) => String(d.id) === String(assignedDriver.id));
-    return getDriverAccount(fromList || assignedDriver);
-  }, [assignedDriver, drivers]);
+  useEffect(() => {
+    if (isOpen && !wasOpenRef.current) {
+      const seed =
+        tripTotalPrice != null && tripTotalPrice !== ""
+          ? String(tripTotalPrice)
+          : "";
+      setFormData(createEmptyForm(seed));
+      setUseOtherSender(false);
+      setAssignedDriver(null);
+    }
+    wasOpenRef.current = isOpen;
+  }, [isOpen, tripId, tripTotalPrice]);
 
   const resolvedAssignedDriver = useMemo(() => {
     if (!assignedDriver) return null;
     return drivers.find((d) => String(d.id) === String(assignedDriver.id)) || assignedDriver;
   }, [assignedDriver, drivers]);
 
-  const tripDriverName = resolvedAssignedDriver ? getDriverName(resolvedAssignedDriver) : "";
+  const tripSenderName = resolvedAssignedDriver ? getDriverName(resolvedAssignedDriver) : "";
 
-  const selectedDriver = useMemo(
+  const selectedSender = useMemo(
+    () => drivers.find((d) => String(d.id) === String(formData.sender_driver_id)),
+    [drivers, formData.sender_driver_id]
+  );
+
+  const selectedCashDriver = useMemo(
     () => drivers.find((d) => String(d.id) === String(formData.driver_id)),
     [drivers, formData.driver_id]
   );
@@ -246,86 +319,145 @@ export default function AddPaymentModal({ isOpen, onClose, tripId, tripTotalPric
     [drivers, formData.recipient_driver_id]
   );
 
+  const isOtherRecipient = formData.recipient_type === "غير";
+
+  // املأ سائق الرحلة تلقائياً في: تحويل بنكي / بوابة دفع / كاش / غير — إن لم يُفعَّل «مرسل آخر»
   useEffect(() => {
-    if (!isOpen || !resolvedAssignedDriver?.id) return;
+    if (!isOpen || useOtherSender || !resolvedAssignedDriver?.id) return;
+    const needsTripSender = isBankTransfer || isPaymentGateway || isCash || isOtherRecipient;
+    if (!needsTripSender) return;
+    const id = String(resolvedAssignedDriver.id);
+    const account = getDriverBankAccount(resolvedAssignedDriver) || "";
     setFormData((p) => ({
       ...p,
-      sender_driver_id: String(resolvedAssignedDriver.id),
+      sender_driver_id: id,
+      driver_id: isCash ? id : p.driver_id,
+      account_number: account || p.account_number,
+      custom_sender_name: "",
     }));
-  }, [isOpen, resolvedAssignedDriver?.id]);
-
-  useEffect(() => {
-    if (isOpen && !wasOpenRef.current) {
-      setFormData(createEmptyForm(tripTotalPrice != null && tripTotalPrice !== "" ? String(tripTotalPrice) : ""));
-    }
-    wasOpenRef.current = isOpen;
-  }, [isOpen, tripId, tripTotalPrice]);
-
-  useEffect(() => {
-    if (!isOpen) return;
-    setFormData((p) => ({
-      ...p,
-      account_number: tripDriverAccount || p.account_number,
-    }));
-  }, [isOpen, tripDriverAccount]);
+  }, [
+    isOpen,
+    isBankTransfer,
+    isPaymentGateway,
+    isCash,
+    isOtherRecipient,
+    useOtherSender,
+    resolvedAssignedDriver,
+  ]);
 
   const set = (key, val) => setFormData((p) => ({ ...p, [key]: val }));
 
   const openAddDriver = (onSelect) => {
-    setPendingDriverSelect(onSelect);
+    pendingDriverSelectRef.current = onSelect;
     setShowAddDriver(true);
   };
 
   const handleDriverCreated = async (created) => {
-    const createdId = created?.id != null ? String(created.id) : created != null ? String(created) : null;
+    const createdId =
+      created?.id != null ? String(created.id) : created != null ? String(created) : null;
+    const selectFn = pendingDriverSelectRef.current;
     try {
       const list = await fetchAllDrivers();
       setDrivers(list);
-      const pickId = createdId && list.some((d) => String(d.id) === createdId)
-        ? createdId
-        : (createdId ?? null);
-      if (pickId && pendingDriverSelect) {
-        pendingDriverSelect(pickId);
-      }
+      const pickId =
+        createdId && list.some((d) => String(d.id) === createdId)
+          ? createdId
+          : createdId ?? null;
+      if (pickId && selectFn) selectFn(pickId);
     } catch {
-      if (createdId && pendingDriverSelect) pendingDriverSelect(createdId);
+      if (createdId && selectFn) selectFn(createdId);
     } finally {
-      setPendingDriverSelect(null);
+      pendingDriverSelectRef.current = null;
       setShowAddDriver(false);
     }
   };
 
+  const resetMethodFields = (extra = {}) => ({
+    sender_driver_id: "",
+    driver_id: "",
+    recipient_driver_id: "",
+    recipient_mode: "",
+    cash_recipient_name: "",
+    custom_sender_name: "",
+    account_number: "",
+    recipient_account: "",
+    bank_id: "",
+    bank_name: "",
+    commission_transfer_date: "",
+    transfer_image: null,
+    ...extra,
+  });
+
+  const handleRecipientTypeChange = (type) => {
+    setUseOtherSender(false);
+    setFormData((p) => ({
+      ...p,
+      recipient_type: type,
+      transfer_method: "",
+      ...resetMethodFields(),
+    }));
+  };
+
   const handleTransferMethodChange = (method) => {
+    setUseOtherSender(false);
+    const tripIdStr = resolvedAssignedDriver?.id != null ? String(resolvedAssignedDriver.id) : "";
+    const usesTripSender =
+      method === "تحويل بنكي" || method === "بوابة دفع" || method === "كاش";
     setFormData((p) => ({
       ...p,
       transfer_method: method,
-      recipient_type: method === "كاش" ? "غير" : p.recipient_type,
-      driver_id: method === "كاش" ? "" : p.driver_id,
-      recipient_driver_id: method === "كاش" ? "" : p.recipient_driver_id,
-      cash_recipient_name: method === "كاش" ? "" : p.cash_recipient_name,
-      recipient_account: method === "كاش" ? "" : p.recipient_account,
-      bank_name: method === "كاش" ? "" : p.bank_name,
-      bank_id: method === "كاش" ? "" : p.bank_id,
+      ...resetMethodFields({
+        sender_driver_id: usesTripSender ? tripIdStr : "",
+        driver_id: method === "كاش" ? tripIdStr : "",
+        account_number:
+          usesTripSender && resolvedAssignedDriver
+            ? getDriverBankAccount(resolvedAssignedDriver)
+            : "",
+      }),
     }));
   };
 
-  const handleCashRecipientTypeChange = (type) => {
+  const handleSenderChange = (driverId) => {
+    const driver = drivers.find((d) => String(d.id) === String(driverId));
     setFormData((p) => ({
       ...p,
-      recipient_type: type,
-      cash_recipient_name: "",
+      sender_driver_id: driverId,
+      driver_id: isCash ? driverId : p.driver_id,
+      custom_sender_name: driver ? getDriverName(driver) : p.custom_sender_name,
+      account_number: driver ? getDriverBankAccount(driver) : "",
+    }));
+  };
+
+  const enableOtherSender = () => {
+    setUseOtherSender(true);
+    setFormData((p) => ({
+      ...p,
+      sender_driver_id: "",
+      driver_id: isCash ? "" : p.driver_id,
+      custom_sender_name: "",
+      account_number: "",
+    }));
+  };
+
+  const restoreTripSender = () => {
+    setUseOtherSender(false);
+    if (resolvedAssignedDriver?.id) {
+      const id = String(resolvedAssignedDriver.id);
+      setFormData((p) => ({
+        ...p,
+        sender_driver_id: id,
+        driver_id: isCash ? id : p.driver_id,
+        custom_sender_name: "",
+        account_number: getDriverBankAccount(resolvedAssignedDriver) || "",
+      }));
+    }
+  };
+
+  const handleRecipientModeChange = (mode) => {
+    setFormData((p) => ({
+      ...p,
+      recipient_mode: mode,
       recipient_driver_id: "",
-    }));
-  };
-
-  const handleRecipientTypeChange = (type) => {
-    setFormData((p) => ({
-      ...p,
-      recipient_type: type,
-      bank_name: type === "حسابنا" ? p.bank_name : "",
-      bank_id: type === "حسابنا" ? p.bank_id : "",
-      driver_id: type === "غير" ? p.driver_id : "",
-      recipient_account: "",
     }));
   };
 
@@ -335,45 +467,56 @@ export default function AddPaymentModal({ isOpen, onClose, tripId, tripTotalPric
       ...p,
       bank_id: bankId,
       bank_name: bank?.name ?? "",
-      recipient_account: bank?.bank_number ?? "",
+      recipient_account: bank?.bank_number ?? p.recipient_account,
     }));
   };
-
-  const handleDriverChange = (driverId) => {
-    const driver = drivers.find((d) => String(d.id) === String(driverId));
-    setFormData((p) => ({
-      ...p,
-      driver_id: driverId,
-      recipient_account: driver ? getDriverAccount(driver) : "",
-    }));
-  };
-
-  const buildRecipientAccount = () => {
-    if (isCash) {
-      if (formData.recipient_type === "حسابنا") {
-        return formData.cash_recipient_name.trim();
-      }
-      return selectedRecipient ? getDriverName(selectedRecipient) : "";
-    }
-    if (formData.recipient_type === "حسابنا") {
-      return formData.recipient_account.trim();
-    }
-    if (selectedDriver) {
-      const account = getDriverAccount(selectedDriver);
-      return account || getDriverName(selectedDriver);
-    }
-    return formData.recipient_account;
-  };
-
-  const buildSenderAccount = () => formData.account_number.trim();
 
   const handleClose = useCallback(() => {
     setFormData(createEmptyForm());
+    setUseOtherSender(false);
     setAssignedDriver(null);
-    setPendingDriverSelect(null);
+    pendingDriverSelectRef.current = null;
     setShowAddDriver(false);
     onClose();
   }, [onClose]);
+
+  const resolveSenderName = () => {
+    if (isBankTransfer || isPaymentGateway || isCash || isOtherRecipient) {
+      if (useOtherSender) {
+        return (
+          formData.custom_sender_name.trim() ||
+          (selectedSender ? getDriverName(selectedSender) : "") ||
+          (selectedCashDriver ? getDriverName(selectedCashDriver) : "")
+        );
+      }
+      return tripSenderName;
+    }
+    return "";
+  };
+
+  const validateTripOrOtherSender = (label = "المرسل") => {
+    if (useOtherSender) {
+      const hasCustom = formData.custom_sender_name.trim();
+      const hasDriver = formData.sender_driver_id || (isCash && formData.driver_id);
+      if (!hasCustom && !hasDriver) {
+        toast.error(`اختر أو اكتب اسم ${label}`);
+        return false;
+      }
+      return true;
+    }
+    if (!resolvedAssignedDriver && !formData.sender_driver_id && !(isCash && formData.driver_id)) {
+      toast.error("لا يوجد سائق مسند للرحلة");
+      return false;
+    }
+    return true;
+  };
+
+  const handleRecipientDriverChange = (driverId) => {
+    setFormData((p) => ({
+      ...p,
+      recipient_driver_id: driverId,
+    }));
+  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -383,45 +526,81 @@ export default function AddPaymentModal({ isOpen, onClose, tripId, tripTotalPric
     }
     if (!formData.amount_paid || isSubmitting) return;
 
-    if (isCash) {
-      if (!resolvedAssignedDriver) {
-        toast.error("لا يوجد سائق مسند للرحلة");
+    if (!formData.recipient_type) {
+      toast.error("اختر نوع المستلم");
+      return;
+    }
+
+    if (isOurAccount && !formData.transfer_method) {
+      toast.error("اختر طريقة الدفع");
+      return;
+    }
+
+    if (isBankTransfer) {
+      if (!formData.commission_transfer_date) {
+        toast.error("اختر تاريخ التحويل");
         return;
       }
-      if (formData.recipient_type === "حسابنا" && !formData.cash_recipient_name.trim()) {
-        toast.error("أدخل اسم المستلم");
-        return;
-      }
-      if (formData.recipient_type === "غير" && !formData.recipient_driver_id) {
-        toast.error("اختر اسم المستلم");
-        return;
-      }
-    } else if (formData.transfer_method === "تحويل بنكي") {
-      if (formData.recipient_type === "حسابنا" && !formData.bank_id) {
-        toast.error("اختر البنك");
-        return;
-      }
-      if (formData.recipient_type === "حسابنا" && !formData.recipient_account.trim()) {
-        toast.error("أدخل رقم الحساب المستلم");
-        return;
-      }
-      if (formData.recipient_type === "غير" && !formData.driver_id) {
-        toast.error("اختر السائق");
+      if (!validateTripOrOtherSender()) return;
+      if (!formData.bank_id) {
+        toast.error("اختر اسم البنك المستلم");
         return;
       }
     }
 
-    const senderAccount = buildSenderAccount();
-    const recipientAccount = buildRecipientAccount();
+    if (isPaymentGateway) {
+      if (!formData.commission_transfer_date) {
+        toast.error("اختر تاريخ التحويل");
+        return;
+      }
+      if (!validateTripOrOtherSender()) return;
+    }
+
+    if (isCash) {
+      if (!formData.commission_transfer_date) {
+        toast.error("اختر تاريخ الاستلام");
+        return;
+      }
+      if (!validateTripOrOtherSender("السائق")) return;
+      if (!formData.cash_recipient_name.trim()) {
+        toast.error("أدخل اسم المستلم");
+        return;
+      }
+    }
+
+    if (isOtherRecipient) {
+      if (!validateTripOrOtherSender("المرسل")) return;
+      if (!formData.recipient_mode) {
+        toast.error("اختر استرداد أو بعمولة");
+        return;
+      }
+      if (!formData.recipient_driver_id) {
+        toast.error("اختر اسم المستلم");
+        return;
+      }
+    }
+
+    const senderAccount = formData.account_number?.trim() || "";
+    const recipientAccount = isCash
+      ? formData.cash_recipient_name.trim()
+      : isOtherRecipient
+        ? (selectedRecipient ? getDriverName(selectedRecipient) : "")
+        : formData.recipient_account?.trim() || formData.bank_name || "";
+
     const payload = {
       ...formData,
       account_number: senderAccount,
       from_account: senderAccount,
       recipient_account: recipientAccount,
       to_account: recipientAccount,
-      driver_id: isCash ? undefined : formData.driver_id || undefined,
       sender_driver_id: formData.sender_driver_id || undefined,
+      driver_id: formData.driver_id || formData.sender_driver_id || undefined,
       recipient_driver_id: formData.recipient_driver_id || undefined,
+      recipient_mode: formData.recipient_mode || undefined,
+      sender_name: resolveSenderName() || undefined,
+      recipient_name: isOtherRecipient
+        ? (selectedRecipient ? getDriverName(selectedRecipient) : undefined)
+        : formData.cash_recipient_name || undefined,
     };
 
     setIsSubmitting(true);
@@ -431,27 +610,27 @@ export default function AddPaymentModal({ isOpen, onClose, tripId, tripTotalPric
       toast.success(json.message || "تمت إضافة الدفعة بنجاح");
       onSuccess?.(json, {
         amount_paid: formData.amount_paid,
+        total_price: formData.total_price,
         transfer_method: formData.transfer_method,
         account_number: senderAccount,
-        sender_name: tripDriverName,
+        sender_name: resolveSenderName(),
         recipient_type: formData.recipient_type,
+        sender_driver_id: formData.sender_driver_id,
         driver_id: formData.driver_id,
-        driver_name: selectedDriver ? getDriverName(selectedDriver) : "",
-        driver_phone: selectedDriver?.phone ?? "",
-        sender_driver_id: resolvedAssignedDriver?.id ?? formData.sender_driver_id,
+        driver_name: selectedCashDriver ? getDriverName(selectedCashDriver) : "",
+        recipient_name: isOtherRecipient
+          ? (selectedRecipient ? getDriverName(selectedRecipient) : "")
+          : formData.cash_recipient_name,
         recipient_driver_id: formData.recipient_driver_id,
-        recipient_name: isCash
-          ? (formData.recipient_type === "حسابنا"
-            ? formData.cash_recipient_name
-            : (selectedRecipient ? getDriverName(selectedRecipient) : ""))
-          : (selectedRecipient ? getDriverName(selectedRecipient) : ""),
         recipient_account: recipientAccount,
         bank_name: formData.bank_name,
         commission_transfer_date: formData.commission_transfer_date,
-        payment_note: formData.payment_note,
+        recipient_mode: formData.recipient_mode,
         transfer_image: formData.transfer_image,
+        payment_note: formData.payment_note,
       });
       setFormData(createEmptyForm());
+      setUseOtherSender(false);
       setAssignedDriver(null);
       onClose();
     } catch (err) {
@@ -501,190 +680,303 @@ export default function AddPaymentModal({ isOpen, onClose, tripId, tripTotalPric
             />
           </ModalField>
 
-          <ModalField label="طريقة التحويل">
+          <ModalField label="نوع المستلم" required>
             <select
-              value={formData.transfer_method}
-              onChange={(e) => handleTransferMethodChange(e.target.value)}
+              value={formData.recipient_type}
+              onChange={(e) => handleRecipientTypeChange(e.target.value)}
               className={modalInputClass}
               disabled={isSubmitting}
+              required
             >
-              <option value="تحويل بنكي">تحويل بنكي</option>
-              <option value="كاش">كاش</option>
-              <option value="محفظة إلكترونية">محفظة إلكترونية</option>
+              <option value="">اختر</option>
+              <option value="حسابنا">حسابنا</option>
+              <option value="غير">غير</option>
             </select>
           </ModalField>
 
-          <ModalField label="رقم الحساب (السائق المسند للرحلة)">
-            <input
-              type="text"
-              value={formData.account_number || (assignedDriver ? "—" : "")}
-              readOnly
-              className={readOnlyInputClass}
-              dir="ltr"
-              placeholder={assignedDriver ? "—" : "لا يوجد سائق مسند للرحلة"}
-            />
-          </ModalField>
+          {isOurAccount && (
+            <ModalField label="طريقة الدفع" required>
+              <select
+                value={formData.transfer_method}
+                onChange={(e) => handleTransferMethodChange(e.target.value)}
+                className={modalInputClass}
+                disabled={isSubmitting}
+                required
+              >
+                <option value="">اختر</option>
+                <option value="تحويل بنكي">تحويل بنكي</option>
+                <option value="كاش">كاش</option>
+                <option value="بوابة دفع">بوابة دفع</option>
+              </select>
+            </ModalField>
+          )}
 
-          {isCash ? (
-            <div className="space-y-3">
-              <ModalField label="اسم المرسل (سائق الرحلة)">
-                <input
-                  type="text"
-                  value={tripDriverName}
-                  readOnly
-                  className={readOnlyInputClass}
-                  placeholder="لا يوجد سائق مسند للرحلة"
+          {(isBankTransfer || isPaymentGateway) && (
+            <div className="space-y-4">
+              <ModalField label="تاريخ التحويل" required>
+                <DateField
+                  value={formData.commission_transfer_date}
+                  onChange={(v) => set("commission_transfer_date", v)}
+                  disabled={isSubmitting}
                 />
               </ModalField>
 
-              <ModalField label="نوع المستلم">
-                <select
-                  value={formData.recipient_type}
-                  onChange={(e) => handleCashRecipientTypeChange(e.target.value)}
-                  className={modalInputClass}
-                  disabled={isSubmitting}
-                >
-                  <option value="حسابنا">حسابنا</option>
-                  <option value="غير">غير</option>
-                </select>
+              <ModalField label="اسم المرسل" required>
+                {!useOtherSender ? (
+                  <div className="flex gap-2 items-stretch">
+                    <input
+                      type="text"
+                      value={tripSenderName || "—"}
+                      readOnly
+                      className={`${readOnlyInputClass} flex-1`}
+                      placeholder="لا يوجد سائق مسند للرحلة"
+                    />
+                    <button
+                      type="button"
+                      onClick={enableOtherSender}
+                      disabled={isSubmitting}
+                      className="shrink-0 px-3 py-2 rounded-xl border border-[#c9a84c] text-[#c9a84c] text-xs font-bold hover:bg-amber-50 transition-colors whitespace-nowrap disabled:opacity-50"
+                    >
+                      مرسل آخر
+                    </button>
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    <div className="flex gap-2 items-center justify-between">
+                      <button
+                        type="button"
+                        onClick={restoreTripSender}
+                        disabled={isSubmitting || !resolvedAssignedDriver}
+                        className="text-[11px] text-[#c9a84c] font-semibold hover:underline disabled:opacity-40"
+                      >
+                        الرجوع لسائق الرحلة
+                      </button>
+                      <span className="text-[11px] text-gray-400">مرسل آخر</span>
+                    </div>
+                    <input
+                      type="text"
+                      value={formData.custom_sender_name}
+                      onChange={(e) => set("custom_sender_name", e.target.value)}
+                      placeholder="اكتب اسم المرسل..."
+                      className={modalInputClass}
+                      disabled={isSubmitting}
+                    />
+                    <DriverSearchSelect
+                      {...driverSelectProps}
+                      value={formData.sender_driver_id}
+                      onChange={handleSenderChange}
+                      placeholder="أو ابحث واختر سائق..."
+                      onAddDriver={() => openAddDriver(handleSenderChange)}
+                    />
+                  </div>
+                )}
               </ModalField>
 
-              {formData.recipient_type === "حسابنا" ? (
-                <ModalField label="اسم المستلم" required>
-                  <input
-                    type="text"
-                    value={formData.cash_recipient_name}
-                    onChange={(e) => set("cash_recipient_name", e.target.value)}
-                    placeholder="ادخل اسم المستلم"
-                    className={modalInputClass}
-                    disabled={isSubmitting}
-                    required
-                  />
-                </ModalField>
-              ) : (
-                <ModalField label="اسم المستلم" required>
-                  <DriverSearchSelect
-                    {...driverSelectProps}
-                    value={formData.recipient_driver_id}
-                    onChange={(id) => set("recipient_driver_id", id)}
-                    placeholder="ابحث عن المستلم..."
-                    onAddDriver={() => openAddDriver((id) => set("recipient_driver_id", id))}
-                  />
-                </ModalField>
-              )}
-            </div>
-          ) : (
-            <>
-              {formData.transfer_method === "تحويل بنكي" && (
-                <ModalField label="نوع حساب المستلم">
+              {isBankTransfer && (
+                <ModalField label="اسم البنك المستلم" required>
                   <select
-                    value={formData.recipient_type}
-                    onChange={(e) => handleRecipientTypeChange(e.target.value)}
+                    value={formData.bank_id}
+                    onChange={(e) => handleBankChange(e.target.value)}
                     className={modalInputClass}
-                    disabled={isSubmitting}
+                    disabled={isSubmitting || banksLoading}
+                    required
                   >
-                    <option value="حسابنا">حسابنا</option>
-                    <option value="غير">غير</option>
+                    <option value="">
+                      {banksLoading
+                        ? "جاري تحميل البنوك..."
+                        : banks.length
+                          ? "اختر البنك"
+                          : "لا توجد بنوك — أضفها من إدارة النظام"}
+                    </option>
+                    {banks.map((bank) => (
+                      <option key={bank.id} value={bank.id}>
+                        {bank.name}
+                      </option>
+                    ))}
                   </select>
                 </ModalField>
               )}
 
-              {formData.transfer_method === "تحويل بنكي" && (
-                formData.recipient_type === "غير" ? (
-                  <>
-                    <ModalField label="اسم السائق" required>
-                      <DriverSearchSelect
-                        {...driverSelectProps}
-                        value={formData.driver_id}
-                        onChange={handleDriverChange}
-                        placeholder="ابحث عن السائق..."
-                        onAddDriver={() => openAddDriver(handleDriverChange)}
-                      />
-                    </ModalField>
-                    {selectedDriver && (
-                      <div className="grid grid-cols-2 gap-3">
-                        <ModalField label="رقم الهاتف">
-                          <input
-                            type="text"
-                            value={selectedDriver.phone || "—"}
-                            readOnly
-                            className={readOnlyInputClass}
-                            dir="ltr"
-                          />
-                        </ModalField>
-                        <ModalField label="رقم الحساب">
-                          <input
-                            type="text"
-                            value={getDriverAccount(selectedDriver) || "—"}
-                            readOnly
-                            className={readOnlyInputClass}
-                            dir="ltr"
-                          />
-                        </ModalField>
-                      </div>
-                    )}
-                  </>
-                ) : (
-                  <>
-                    <ModalField label="البنك" required>
-                      <select
-                        value={formData.bank_id}
-                        onChange={(e) => handleBankChange(e.target.value)}
-                        className={modalInputClass}
-                        disabled={isSubmitting || banksLoading}
-                        required
-                      >
-                        <option value="">
-                          {banksLoading ? "جاري تحميل البنوك..." : banks.length ? "اختر البنك" : "لا توجد بنوك — أضفها من إدارة النظام"}
-                        </option>
-                        {banks.map((bank) => (
-                          <option key={bank.id} value={bank.id}>{bank.name}</option>
-                        ))}
-                      </select>
-                    </ModalField>
-                    <ModalField label="رقم الحساب المستلم" required>
-                      <input
-                        type="text"
-                        placeholder="أدخل رقم الحساب"
-                        value={formData.recipient_account}
-                        onChange={(e) => set("recipient_account", e.target.value)}
-                        className={modalInputClass}
-                        disabled={isSubmitting}
-                        dir="ltr"
-                        required
-                      />
-                    </ModalField>
-                  </>
-                )
-              )}
-            </>
+              <ModalField label="صورة التحويل">
+                <label className={`flex w-full cursor-pointer items-center justify-center gap-2 rounded-xl border border-gray-200 px-3 py-2.5 text-sm text-gray-500 hover:bg-gray-50 transition-colors ${isSubmitting ? "opacity-50 pointer-events-none" : ""}`}>
+                  <Upload className="w-4 h-4 text-gray-400" />
+                  <span>{formData.transfer_image ? formData.transfer_image.name : "اختر الملف"}</span>
+                  <input
+                    type="file"
+                    className="hidden"
+                    accept="image/*"
+                    disabled={isSubmitting}
+                    onChange={(e) => set("transfer_image", e.target.files?.[0] ?? null)}
+                  />
+                </label>
+              </ModalField>
+            </div>
           )}
 
-          <ModalField label={isCash ? "تاريخ الاستلام" : "تاريخ التحويل"}>
-            <input
-              type="date"
-              value={formData.commission_transfer_date}
-              onChange={(e) => set("commission_transfer_date", e.target.value)}
-              className={modalInputClass}
-              disabled={isSubmitting}
-            />
-          </ModalField>
+          {isCash && (
+            <div className="space-y-4">
+              <ModalField label="تاريخ الاستلام" required>
+                <DateField
+                  value={formData.commission_transfer_date}
+                  onChange={(v) => set("commission_transfer_date", v)}
+                  disabled={isSubmitting}
+                />
+              </ModalField>
 
-          <ModalField label="صورة التحويل">
-            <label className={`flex w-full cursor-pointer items-center justify-center gap-2 rounded-xl border border-gray-200 px-3 py-2.5 text-sm text-gray-500 hover:bg-gray-50 transition-colors ${isSubmitting ? "opacity-50 pointer-events-none" : ""}`}>
-              <Upload className="w-4 h-4 text-gray-400" />
-              <span>{formData.transfer_image ? formData.transfer_image.name : "اختر الملف"}</span>
-              <input
-                type="file"
-                className="hidden"
-                accept="image/*"
-                disabled={isSubmitting}
-                onChange={(e) => set("transfer_image", e.target.files[0])}
-              />
-            </label>
-          </ModalField>
+              <ModalField label="اسم السائق" required>
+                {!useOtherSender ? (
+                  <div className="flex gap-2 items-stretch">
+                    <input
+                      type="text"
+                      value={tripSenderName || "—"}
+                      readOnly
+                      className={`${readOnlyInputClass} flex-1`}
+                      placeholder="لا يوجد سائق مسند للرحلة"
+                    />
+                    <button
+                      type="button"
+                      onClick={enableOtherSender}
+                      disabled={isSubmitting}
+                      className="shrink-0 px-3 py-2 rounded-xl border border-[#c9a84c] text-[#c9a84c] text-xs font-bold hover:bg-amber-50 transition-colors whitespace-nowrap disabled:opacity-50"
+                    >
+                      مرسل آخر
+                    </button>
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    <div className="flex gap-2 items-center justify-between">
+                      <button
+                        type="button"
+                        onClick={restoreTripSender}
+                        disabled={isSubmitting || !resolvedAssignedDriver}
+                        className="text-[11px] text-[#c9a84c] font-semibold hover:underline disabled:opacity-40"
+                      >
+                        الرجوع لسائق الرحلة
+                      </button>
+                      <span className="text-[11px] text-gray-400">مرسل آخر</span>
+                    </div>
+                    <input
+                      type="text"
+                      value={formData.custom_sender_name}
+                      onChange={(e) => set("custom_sender_name", e.target.value)}
+                      placeholder="اكتب اسم السائق..."
+                      className={modalInputClass}
+                      disabled={isSubmitting}
+                    />
+                    <DriverSearchSelect
+                      {...driverSelectProps}
+                      value={formData.driver_id}
+                      onChange={handleSenderChange}
+                      placeholder="أو ابحث واختر سائق..."
+                      onAddDriver={() => openAddDriver(handleSenderChange)}
+                    />
+                  </div>
+                )}
+              </ModalField>
 
-          <ModalField label="ملاحظة">
+              <ModalField label="اسم المستلم" required>
+                <input
+                  type="text"
+                  value={formData.cash_recipient_name}
+                  onChange={(e) => set("cash_recipient_name", e.target.value)}
+                  placeholder="ادخل اسم المستلم"
+                  className={modalInputClass}
+                  disabled={isSubmitting}
+                  required
+                />
+              </ModalField>
+            </div>
+          )}
+
+          {isOtherRecipient && (
+            <div className="space-y-4">
+              <ModalField label="اسم المرسل" required>
+                {!useOtherSender ? (
+                  <div className="flex gap-2 items-stretch">
+                    <input
+                      type="text"
+                      value={tripSenderName || "—"}
+                      readOnly
+                      className={`${readOnlyInputClass} flex-1`}
+                      placeholder="لا يوجد سائق مسند للرحلة"
+                    />
+                    <button
+                      type="button"
+                      onClick={enableOtherSender}
+                      disabled={isSubmitting}
+                      className="shrink-0 px-3 py-2 rounded-xl border border-[#c9a84c] text-[#c9a84c] text-xs font-bold hover:bg-amber-50 transition-colors whitespace-nowrap disabled:opacity-50"
+                    >
+                      مرسل آخر
+                    </button>
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    <div className="flex gap-2 items-center justify-between">
+                      <button
+                        type="button"
+                        onClick={restoreTripSender}
+                        disabled={isSubmitting || !resolvedAssignedDriver}
+                        className="text-[11px] text-[#c9a84c] font-semibold hover:underline disabled:opacity-40"
+                      >
+                        الرجوع لسائق الرحلة
+                      </button>
+                      <span className="text-[11px] text-gray-400">مرسل آخر</span>
+                    </div>
+                    <input
+                      type="text"
+                      value={formData.custom_sender_name}
+                      onChange={(e) => set("custom_sender_name", e.target.value)}
+                      placeholder="اكتب اسم المرسل..."
+                      className={modalInputClass}
+                      disabled={isSubmitting}
+                    />
+                    <DriverSearchSelect
+                      {...driverSelectProps}
+                      value={formData.sender_driver_id}
+                      onChange={handleSenderChange}
+                      placeholder="أو ابحث واختر سائق..."
+                      onAddDriver={() => openAddDriver(handleSenderChange)}
+                    />
+                  </div>
+                )}
+              </ModalField>
+
+              <ModalField label="اسم المستلم" required>
+                <div className="flex gap-2 mb-2">
+                  {["استرداد", "بعمولة"].map((mode) => (
+                    <button
+                      key={mode}
+                      type="button"
+                      onClick={() => handleRecipientModeChange(mode)}
+                      disabled={isSubmitting}
+                      className={`flex-1 py-2.5 rounded-xl text-sm font-bold transition-colors disabled:opacity-50 ${
+                        formData.recipient_mode === mode
+                          ? "bg-[#c9a84c] text-white shadow-sm"
+                          : "border border-gray-200 text-gray-600 hover:bg-gray-50"
+                      }`}
+                    >
+                      {mode}
+                    </button>
+                  ))}
+                </div>
+                {formData.recipient_mode ? (
+                  <DriverSearchSelect
+                    drivers={drivers}
+                    loading={driversLoading}
+                    disabled={isSubmitting}
+                    canAddDriver={false}
+                    value={formData.recipient_driver_id}
+                    onChange={handleRecipientDriverChange}
+                    placeholder={`ابحث عن مستلم (${formData.recipient_mode})...`}
+                  />
+                ) : (
+                  <p className="text-xs text-gray-400 text-right">اختر استرداد أو بعمولة أولاً</p>
+                )}
+              </ModalField>
+            </div>
+          )}
+
+          <ModalField label="ملاحظات" hint="اختياري">
             <textarea
               rows={2}
               placeholder="أضف ملاحظة (اختياري)"
@@ -707,7 +999,10 @@ export default function AddPaymentModal({ isOpen, onClose, tripId, tripTotalPric
 
       <DriverFormModal
         isOpen={showAddDriver}
-        onClose={() => { setShowAddDriver(false); setPendingDriverSelect(null); }}
+        onClose={() => {
+          setShowAddDriver(false);
+          pendingDriverSelectRef.current = null;
+        }}
         driverData={null}
         onSaved={handleDriverCreated}
         onToast={(type, message) => toast[type](message)}

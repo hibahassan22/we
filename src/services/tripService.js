@@ -221,6 +221,9 @@ export async function addTripPayment(tripId, payment) {
   append("driver_id", payment.driver_id);
   append("sender_driver_id", payment.sender_driver_id);
   append("recipient_driver_id", payment.recipient_driver_id);
+  append("sender_name", payment.sender_name ?? payment.custom_sender_name);
+  append("recipient_name", payment.recipient_name ?? payment.cash_recipient_name);
+  append("recipient_mode", payment.recipient_mode);
   append("notes", payment.notes ?? payment.payment_note);
   append("payment_date", payment.payment_date ?? payment.commission_transfer_date);
   if (payment.transfer_image) fd.append("transfer_image", payment.transfer_image);

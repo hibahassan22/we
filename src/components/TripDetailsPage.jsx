@@ -876,6 +876,7 @@ export default function TripDetailsPage() {
         isOpen={showAssignDriver}
         onClose={() => setShowAssignDriver(false)}
         tripId={tripId}
+        tripTotalPrice={trip?.total_price ?? trip?.price ?? ""}
         onSuccess={() => fetchTrip({ silent: true })}
       />
       <ConfirmModal

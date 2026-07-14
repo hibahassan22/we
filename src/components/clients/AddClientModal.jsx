@@ -4,7 +4,7 @@ import AppModal, { ModalField, ModalActions, modalInputClass } from "../ui/AppMo
 import { createCustomer } from "../../services/customerService";
 import { sanitizePhoneInput, validatePhoneTenDigits } from "../../lib/phoneValidation";
 
-const EMPTY_FORM = { name: "", phone: "", address: "", gender: "أنثى", nationality: "سعودية" };
+const EMPTY_FORM = { name: "", phone: "", address: "", gender: "ذكر", nationality: "سعودية" };
 
 export default function AddClientModal({ isOpen, onClose, onSuccess }) {
   const toast = useToast();
@@ -118,8 +118,10 @@ export default function AddClientModal({ isOpen, onClose, onSuccess }) {
             className={`${modalInputClass} appearance-none`}
             disabled={saving}
           >
-            <option value="أنثى">أنثى</option>
             <option value="ذكر">ذكر</option>
+            <option value="أنثى">أنثى</option>
+            <option value="طفل">طفل</option>
+            <option value="غير">غير</option>
           </select>
         </ModalField>
         <ModalActions

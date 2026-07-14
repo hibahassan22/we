@@ -18,6 +18,7 @@ import RewardsPage from "./components/RewardsPage";
 import ClientsPage from "./components/ClientsPage";
 import SupportPage from "./components/SupportPage";
 import DriversPage from "./components/DriversPage";
+import BrokersPage from "./components/BrokersPage";
 import CreateTripPage from "./components/CreateTripPage";
 import NewTripFormPage from "./components/NewTripFormPage";
 import ApprovalsPage from "./components/ApprovalsPage";
@@ -72,6 +73,7 @@ export default function App() {
           <Route path="/support" element={<AdminPage><SupportPage /></AdminPage>} />
           <Route path="/drivers" element={<AdminPage><DriversPage /></AdminPage>} />
           <Route path="/drivers/:driverId" element={<AdminPage><DriversPage /></AdminPage>} />
+          <Route path="/brokers" element={<AdminPage><BrokersPage /></AdminPage>} />
           <Route path="/create-trip" element={<AdminPage><CreateTripPage /></AdminPage>} />
           <Route path="/new-trip" element={<AdminPage><NewTripFormPage /></AdminPage>} />
 

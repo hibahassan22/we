@@ -16,6 +16,7 @@ const ROUTE_PRIORITY = [
   "/create-trip",
   "/clients",
   "/drivers",
+  "/brokers",
   "/rewards",
   "/support",
   "/notifications",
