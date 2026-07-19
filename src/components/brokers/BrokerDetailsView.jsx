@@ -1,4 +1,6 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import BrokerTripsTab from "./BrokerTripsTab.jsx";
+import { mediaUrlCandidates, normalizeMediaUrl } from "../../lib/driverMedia.js";
 
 function fmtMoney(n) {
   const num = Number(n) || 0;
@@ -16,28 +18,40 @@ function InfoRow({ label, value, ltr }) {
   );
 }
 
-function BrokerTripsTab({ broker }) {
-  const rows = [
-    { label: "الرحلات المكتملة", value: broker?.completed_trips ?? 0, tone: "text-green-600 bg-green-50" },
-    { label: "الرحلات النشطة", value: broker?.active_trips ?? 0, tone: "text-[#b88121] bg-amber-50" },
-    { label: "إجمالي الرحلات", value: broker?.trips_count ?? 0, tone: "text-sky-600 bg-sky-50" },
-  ];
+function BrokerMediaImage({ src, alt, className }) {
+  const [failed, setFailed] = useState(false);
+  const [candidateIndex, setCandidateIndex] = useState(0);
+  const candidates = mediaUrlCandidates(src);
+  const currentSrc = candidates[candidateIndex] || "";
+
+  useEffect(() => {
+    setFailed(false);
+    setCandidateIndex(0);
+  }, [src]);
+
+  if (!currentSrc || failed) {
+    return (
+      <div className={`bg-gray-100 text-gray-400 flex items-center justify-center text-xs min-h-[8rem] ${className || ""}`}>
+        لا توجد صورة
+      </div>
+    );
+  }
 
   return (
-    <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6 space-y-4" dir="rtl">
-      <h3 className="text-sm font-bold text-[#c9a84c] text-right">سجل الرحلات</h3>
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-        {rows.map((r) => (
-          <div key={r.label} className={`rounded-xl px-4 py-4 text-center ${r.tone}`}>
-            <p className="text-2xl font-extrabold">{r.value}</p>
-            <p className="text-xs mt-1 opacity-80">{r.label}</p>
-          </div>
-        ))}
-      </div>
-      <p className="text-xs text-gray-400 text-right">
-        تفاصيل رحلات الوسيط ستظهر هنا عند ربطها من النظام.
-      </p>
-    </div>
+    <img
+      src={currentSrc}
+      alt={alt || ""}
+      className={className}
+      referrerPolicy="no-referrer"
+      loading="lazy"
+      onError={() => {
+        if (candidateIndex + 1 < candidates.length) {
+          setCandidateIndex((i) => i + 1);
+          return;
+        }
+        setFailed(true);
+      }}
+    />
   );
 }
 
@@ -59,7 +73,10 @@ export default function BrokerDetailsView({ broker, onBack, onEdit, onDelete }) 
       ? `${Number(broker.commission).toLocaleString("en-US")} SR`
       : `${broker.commission}%`;
 
-  const statusLabel = broker.status === "active" ? "نشط" : broker.status || "—";
+  const statusLabel = broker.status === "active" || Number(broker.status) === 1 ? "نشط" : broker.status || "—";
+  const isDriverBroker = broker.is_driver_broker || (broker.driver_id != null && broker.driver_id !== "");
+  const identityImageRaw = broker.national_id_image_raw || broker.national_id_image || broker.photo_url;
+  const identityImage = normalizeMediaUrl(identityImageRaw);
 
   return (
     <div dir="rtl" className="w-full space-y-4">
@@ -74,7 +91,6 @@ export default function BrokerDetailsView({ broker, onBack, onEdit, onDelete }) 
         </svg>
       </button>
 
-      {/* Profile Card — مثل السائقين */}
       <div className="bg-white rounded-2xl p-6 border border-gray-100 shadow-sm flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4">
         <div className="flex flex-wrap gap-1.5 text-xs font-semibold">
           <button
@@ -96,7 +112,12 @@ export default function BrokerDetailsView({ broker, onBack, onEdit, onDelete }) 
           <div className="text-right">
             <h2 className="text-xl font-bold text-gray-800">{broker.name}</h2>
             <p className="text-xs text-gray-400 mt-1" dir="ltr">{broker.phone || "—"}</p>
-            <div className="flex gap-2 mt-2 justify-end">
+            <div className="flex flex-wrap gap-2 mt-2 justify-end">
+              <span className={`text-xs px-2.5 py-0.5 rounded-full font-semibold ${
+                isDriverBroker ? "bg-amber-50 text-[#b88121]" : "bg-gray-100 text-gray-600"
+              }`}>
+                {isDriverBroker ? "وسيط سائق" : "وسيط"}
+              </span>
               <span className="text-xs px-2.5 py-0.5 rounded-full bg-green-50 text-green-700 font-semibold">
                 {statusLabel}
               </span>
@@ -105,21 +126,12 @@ export default function BrokerDetailsView({ broker, onBack, onEdit, onDelete }) 
               </span>
             </div>
           </div>
-          {broker.photo_url ? (
-            <img
-              src={broker.photo_url}
-              alt={broker.name}
-              className="w-14 h-14 rounded-full object-cover border border-gray-200 shrink-0"
-            />
-          ) : (
-            <div className="w-14 h-14 rounded-full bg-gray-700 text-white flex items-center justify-center text-2xl font-bold shrink-0">
-              {(broker.name || "?")[0]}
-            </div>
-          )}
+          <div className="w-14 h-14 rounded-full bg-[#c9a84c]/15 text-[#c9a84c] flex items-center justify-center text-2xl font-bold shrink-0">
+            {(broker.name || "?").trim().charAt(0) || "؟"}
+          </div>
         </div>
       </div>
 
-      {/* Tabs */}
       <div className="bg-white rounded-2xl p-2 border border-gray-100 shadow-sm flex gap-4 text-sm font-semibold text-gray-400 overflow-x-auto">
         {tabs.map((tab) => (
           <span
@@ -139,7 +151,6 @@ export default function BrokerDetailsView({ broker, onBack, onEdit, onDelete }) 
         ))}
       </div>
 
-      {/* Tab content */}
       <div className="mt-2">
         {activeTab === "personal" && (
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
@@ -148,7 +159,7 @@ export default function BrokerDetailsView({ broker, onBack, onEdit, onDelete }) 
               <InfoRow label="الاسم" value={broker.name} />
               <InfoRow label="كود الوسيط" value={broker.broker_code} ltr />
               <InfoRow label="الهاتف" value={broker.phone} ltr />
-              <InfoRow label="رقم الهوية" value={broker.identity_number} ltr />
+              <InfoRow label="رقم الهوية" value={broker.identity_number || broker.national_id} ltr />
               <InfoRow label="المدينة" value={broker.address} />
               <InfoRow label="إجمالي العملاء" value={String(broker.clients_count ?? 0)} />
               <InfoRow label="رحلات" value={String(broker.trips_count ?? 0)} />
@@ -165,16 +176,29 @@ export default function BrokerDetailsView({ broker, onBack, onEdit, onDelete }) 
                 <InfoRow label="الرحلات النشطة" value={String(broker.active_trips ?? 0)} />
               </div>
 
-              {broker.photo_url && (
+              {(broker.bank_name || broker.account_number || broker.account_owner) && (
                 <div className="bg-white p-6 rounded-2xl border border-gray-100 shadow-sm space-y-3">
-                  <h3 className="text-sm font-bold text-[#c9a84c]">صورة الهوية</h3>
-                  <img
-                    src={broker.photo_url}
-                    alt="صورة الهوية"
-                    className="w-full max-h-56 object-contain rounded-xl bg-gray-50"
-                  />
+                  <h3 className="text-sm font-bold text-[#c9a84c]">البيانات البنكية</h3>
+                  <InfoRow label="اسم البنك" value={broker.bank_name} />
+                  <InfoRow label="صاحب الحساب" value={broker.account_owner || broker.account_holder_name} />
+                  <InfoRow label="رقم الحساب" value={broker.account_number} ltr />
                 </div>
               )}
+
+              <div className="bg-white p-6 rounded-2xl border border-gray-100 shadow-sm space-y-3">
+                <h3 className="text-sm font-bold text-[#c9a84c]">صورة الهوية</h3>
+                {identityImageRaw ? (
+                  <a href={identityImage || undefined} target="_blank" rel="noreferrer">
+                    <BrokerMediaImage
+                      src={identityImageRaw}
+                      alt="صورة الهوية"
+                      className="w-full max-h-56 object-contain rounded-xl bg-gray-50"
+                    />
+                  </a>
+                ) : (
+                  <p className="text-center text-sm text-gray-400 py-6">لا توجد صورة هوية</p>
+                )}
+              </div>
             </div>
           </div>
         )}

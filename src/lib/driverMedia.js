@@ -15,10 +15,44 @@ export const DRIVER_IMAGE_FIELDS = [
 
 export function normalizeMediaUrl(url) {
   if (url == null || url === "") return "";
-  const s = String(url).trim();
+  const s = String(url).trim().replace(/\\/g, "/");
   if (!s) return "";
+  if (/^https?:\/\//i.test(s)) {
+    return s
+      .replace(/^https?:\/\/drivo\.elmoroj\.com/i, MEDIA_HOST)
+      .replace(/^https?:\/\/www\.drivo\.elmoroj\.com/i, MEDIA_HOST);
+  }
+  if (s.startsWith("//")) return `https:${s}`;
   if (s.startsWith("/")) return `${MEDIA_HOST}${s}`;
-  return s.replace(/^https?:\/\/drivo\.elmoroj\.com/i, MEDIA_HOST);
+  if (s.startsWith("storage/")) return `${MEDIA_HOST}/${s}`;
+  // مسارات نسبية من الـ API مثل uploads/brokers/xxx.jpg
+  return `${MEDIA_HOST}/storage/${s.replace(/^\.\//, "")}`;
+}
+
+/** بدائل محتملة لمسار صورة لو الرابط الأساسي فشل */
+export function mediaUrlCandidates(url) {
+  const raw = String(url ?? "").trim().replace(/\\/g, "/");
+  if (!raw) return [];
+
+  const primary = normalizeMediaUrl(raw);
+  const candidates = [primary];
+
+  if (!/^https?:\/\//i.test(raw) && !raw.startsWith("//")) {
+    const relative = raw.replace(/^\//, "").replace(/^\.\//, "");
+    candidates.push(
+      `${MEDIA_HOST}/storage/${relative}`,
+      `${MEDIA_HOST}/${relative}`,
+      `${MEDIA_HOST}/storage/app/public/${relative}`,
+      `${MEDIA_HOST}/storage/app/assets/${relative}`,
+      `${MEDIA_HOST}/public/${relative}`,
+    );
+  }
+
+  for (const c of [...candidates]) {
+    if (c.startsWith("https://")) candidates.push(c.replace(/^https:/, "http:"));
+  }
+
+  return [...new Set(candidates.filter(Boolean))];
 }
 
 export function normalizeDriverMedia(driver) {

@@ -4,11 +4,15 @@ import { useToast } from "../lib/toast";
 import AppModal, { ModalField, modalInputClass } from "./ui/AppModal";
 import { fetchTripDetailsById } from "../services/tripService.js";
 import { fetchAllDrivers } from "../services/driverSaleChatService.js";
-import { fetchBanks } from "../services/bankService.js";
+import { fetchBanks, applyBankSelection, getActiveBanks } from "../services/bankService.js";
+import BankReadOnlyFields from "./ui/BankReadOnlyFields.jsx";
+import { fetchSalesList } from "../services/salesService.js";
 import DriverFormModal from "./drivers/DriverFormModal.jsx";
 import { usePermissions } from "../hooks/usePermissions.js";
 import { PERMISSIONS } from "../lib/permissions.js";
 import { getDriverBankAccount } from "../lib/driverUtils.js";
+import { getDriverBankingData, saveDriverBankingData } from "../lib/driverBanking.js";
+import { sendDriverNotification } from "../lib/driverStatuses.js";
 
 const API_BASE = "https://drivo1.elmoroj.com/api";
 const readOnlyInputClass = `${modalInputClass} bg-gray-50 text-gray-600 cursor-not-allowed`;
@@ -16,6 +20,8 @@ const readOnlyInputClass = `${modalInputClass} bg-gray-50 text-gray-600 cursor-n
 const EMPTY_FORM = {
   trip_id: "",
   driver_id: "",
+  driver_balance: "",
+  driver_banking_status: "",
   our_commission: "",
   total_price: "",
   paid_amount: "",
@@ -33,6 +39,7 @@ const EMPTY_FORM = {
   commission_transfer_date: "",
   notes: "",
   transfer_image: null,
+  sales_id: "",
 };
 
 function calcCommission15(priceVal) {
@@ -54,8 +61,11 @@ function matchesDriverSearch(driver, query) {
   if (!q) return true;
   const name = getDriverName(driver).toLowerCase();
   const phone = getDriverPhone(driver).replace(/\s/g, "");
+  const banking = getDriverBankingData(driver);
   const qDigits = q.replace(/\s/g, "");
-  return name.includes(q) || (qDigits && phone.includes(qDigits));
+  return name.includes(q)
+    || (qDigits && phone.includes(qDigits))
+    || banking.bankingStatus.includes(q);
 }
 
 function DriverSearchSelect({
@@ -128,7 +138,9 @@ function DriverSearchSelect({
                 {isSearching ? "لا توجد نتائج" : "لا يوجد سائقون"}
               </li>
             ) : (
-              filtered.map((driver) => (
+              filtered.map((driver) => {
+                const banking = getDriverBankingData(driver);
+                return (
                 <li key={driver.id}>
                   <button
                     type="button"
@@ -142,15 +154,22 @@ function DriverSearchSelect({
                       String(driver.id) === String(value) ? "bg-amber-50 text-[#c9a84c] font-medium" : "text-gray-700"
                     }`}
                   >
-                    <span className="block">{getDriverName(driver)}</span>
-                    {getDriverPhone(driver) && (
-                      <span className="block text-[11px] text-gray-400 mt-0.5" dir="ltr">
-                        {getDriverPhone(driver)}
+                    <span className="flex items-center justify-between gap-2">
+                      <span>{getDriverName(driver)}</span>
+                      <span className={`shrink-0 rounded-lg px-2 py-0.5 text-[10px] font-bold ${
+                        banking.isDebtor ? "bg-red-50 text-red-600" : "bg-green-50 text-green-600"
+                      }`}>
+                        {banking.bankingStatus}
                       </span>
-                    )}
+                    </span>
+                    <span className="flex items-center justify-between gap-2 text-[11px] text-gray-400 mt-0.5">
+                      <span>{banking.balance.toLocaleString("ar-SA")} ر.س</span>
+                      {getDriverPhone(driver) && <span dir="ltr">{getDriverPhone(driver)}</span>}
+                    </span>
                   </button>
                 </li>
-              ))
+                );
+              })
             )}
           </ul>
         )}
@@ -166,6 +185,134 @@ function DriverSearchSelect({
         >
           + إضافة سائق
         </button>
+      )}
+    </div>
+  );
+}
+
+function getSalesName(sale) {
+  return String(sale?.name ?? sale?.fullName ?? "").trim() || "—";
+}
+
+function getSalesPhone(sale) {
+  return String(sale?.phone ?? "").trim();
+}
+
+function formatSalesOption(sale) {
+  const name = getSalesName(sale);
+  const phone = getSalesPhone(sale);
+  return phone ? `${name} — ${phone}` : name;
+}
+
+function matchesSalesSearch(sale, query) {
+  const q = query.trim().toLowerCase();
+  if (!q) return true;
+  const name = getSalesName(sale).toLowerCase();
+  const email = String(sale?.email ?? "").toLowerCase();
+  const phone = getSalesPhone(sale).replace(/\s/g, "");
+  const qDigits = q.replace(/\s/g, "");
+  return (
+    name.includes(q) ||
+    email.includes(q) ||
+    (qDigits && phone.includes(qDigits))
+  );
+}
+
+/** بحث واختيار مندوب من خدمة العملاء (/api/sales) */
+function SalesSearchSelect({
+  sales,
+  value,
+  onChange,
+  loading,
+  disabled,
+  placeholder = "ابحث بالاسم أو الهاتف...",
+}) {
+  const [query, setQuery] = useState("");
+  const [open, setOpen] = useState(false);
+  const containerRef = useRef(null);
+
+  const selected = useMemo(
+    () => sales.find((s) => String(s.id) === String(value)),
+    [sales, value]
+  );
+  const selectedLabel = selected ? formatSalesOption(selected) : "";
+
+  useEffect(() => {
+    if (selected) setQuery(selectedLabel);
+    else if (!open) setQuery("");
+  }, [selected, selectedLabel, open]);
+
+  const filtered = useMemo(() => {
+    if (selected && query === selectedLabel) return sales;
+    return sales.filter((s) => matchesSalesSearch(s, query));
+  }, [sales, query, selected, selectedLabel]);
+
+  const isSearching = query.trim().length > 0 && (!selected || query !== selectedLabel);
+
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      if (containerRef.current && !containerRef.current.contains(e.target)) {
+        setOpen(false);
+        if (selected) setQuery(selectedLabel);
+        else setQuery("");
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [selected, selectedLabel]);
+
+  return (
+    <div ref={containerRef} className="relative">
+      <input
+        type="text"
+        value={query}
+        onChange={(e) => {
+          const next = e.target.value;
+          setQuery(next);
+          setOpen(true);
+          if (selected && next !== selectedLabel) onChange("");
+        }}
+        onFocus={() => !disabled && setOpen(true)}
+        disabled={disabled || loading}
+        placeholder={loading ? "جاري تحميل خدمة العملاء..." : placeholder}
+        className={modalInputClass}
+        autoComplete="off"
+      />
+      <div className="absolute left-3 top-3 pointer-events-none text-gray-400">
+        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+        </svg>
+      </div>
+      {open && !disabled && !loading && (
+        <ul className="absolute z-50 mt-1 w-full max-h-64 overflow-y-auto rounded-xl border border-gray-200 bg-white shadow-lg py-1">
+          {filtered.length === 0 ? (
+            <li className="px-3 py-2.5 text-xs text-gray-400 text-right">
+              {isSearching ? "لا توجد نتائج" : "لا يوجد مندوبون"}
+            </li>
+          ) : (
+            filtered.map((sale) => (
+              <li key={sale.id}>
+                <button
+                  type="button"
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => {
+                    onChange(String(sale.id));
+                    setQuery(formatSalesOption(sale));
+                    setOpen(false);
+                  }}
+                  className={`w-full px-3 py-2.5 text-sm text-right hover:bg-amber-50 transition-colors ${
+                    String(sale.id) === String(value) ? "bg-amber-50 text-[#c9a84c] font-medium" : "text-gray-700"
+                  }`}
+                >
+                  <span className="block font-medium">{getSalesName(sale)}</span>
+                  <span className="block text-[11px] text-gray-400 mt-0.5" dir="ltr">
+                    {[getSalesPhone(sale), sale.email].filter(Boolean).join(" · ")}
+                  </span>
+                </button>
+              </li>
+            ))
+          )}
+        </ul>
       )}
     </div>
   );
@@ -213,11 +360,15 @@ export default function AssignTripModal({
   const canAddDriver = can(PERMISSIONS.DRIVERS_CREATE);
 
   const [loading, setLoading] = useState(false);
+  const [requestLoading, setRequestLoading] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
   const [drivers, setDrivers] = useState([]);
   const [driversLoading, setDriversLoading] = useState(false);
   const [banks, setBanks] = useState([]);
   const [banksLoading, setBanksLoading] = useState(false);
+  const [salesList, setSalesList] = useState([]);
+  const [salesLoading, setSalesLoading] = useState(false);
+  const [showOtherSales, setShowOtherSales] = useState(false);
   const [form, setForm] = useState(EMPTY_FORM);
   const [commissionManual, setCommissionManual] = useState(false);
   const [useOtherSender, setUseOtherSender] = useState(false);
@@ -248,6 +399,7 @@ export default function AssignTripModal({
     setShowConfirm(false);
     setCommissionManual(false);
     setUseOtherSender(false);
+    setShowOtherSales(false);
     setForm({
       ...EMPTY_FORM,
       trip_id: fixedTripId ? String(fixedTripId) : "",
@@ -267,6 +419,12 @@ export default function AssignTripModal({
       .then(setBanks)
       .catch(() => setBanks([]))
       .finally(() => setBanksLoading(false));
+
+    setSalesLoading(true);
+    fetchSalesList()
+      .then(setSalesList)
+      .catch(() => setSalesList([]))
+      .finally(() => setSalesLoading(false));
 
     const tripIdToLoad = fixedTripId;
     if (tripIdToLoad) {
@@ -292,6 +450,16 @@ export default function AssignTripModal({
     [drivers, form.driver_id]
   );
 
+  useEffect(() => {
+    if (!selectedAssignDriver) return;
+    const banking = getDriverBankingData(selectedAssignDriver);
+    setForm((current) => ({
+      ...current,
+      driver_balance: String(banking.balance),
+      driver_banking_status: banking.bankingStatus,
+    }));
+  }, [selectedAssignDriver]);
+
   const assignDriverName = fromDriverPage
     ? driverName || ""
     : selectedAssignDriver
@@ -302,6 +470,23 @@ export default function AssignTripModal({
     () => drivers.find((d) => String(d.id) === String(form.sender_driver_id)),
     [drivers, form.sender_driver_id]
   );
+
+  const selectedBank = useMemo(
+    () => banks.find((b) => String(b.id) === String(form.bank_id)),
+    [banks, form.bank_id]
+  );
+
+  useEffect(() => {
+    if (!isOpen || !isBankTransfer || banksLoading) return;
+    const activeBanks = getActiveBanks(banks);
+    if (!activeBanks.length) return;
+    setForm((current) => {
+      if (current.bank_id && activeBanks.some((b) => String(b.id) === String(current.bank_id))) {
+        return current;
+      }
+      return { ...current, ...applyBankSelection(activeBanks[0]) };
+    });
+  }, [isOpen, isBankTransfer, banks, banksLoading]);
 
   // المرسل الافتراضي = السائق المُسنَد
   useEffect(() => {
@@ -358,6 +543,43 @@ export default function AssignTripModal({
       total_price: val,
       our_commission: commissionManual ? p.our_commission : calcCommission15(val),
     }));
+  };
+
+  const handleAssignDriverChange = (driverId) => {
+    const driver = drivers.find((item) => String(item.id) === String(driverId));
+    const banking = driver ? getDriverBankingData(driver) : null;
+    setForm((current) => ({
+      ...current,
+      driver_id: driverId,
+      driver_balance: banking ? String(banking.balance) : "",
+      driver_banking_status: banking?.bankingStatus ?? "",
+    }));
+  };
+
+  const handleAssignedBalanceChange = (value) => {
+    const balance = Math.max(0, Number(value) || 0);
+    setForm((current) => ({
+      ...current,
+      driver_balance: value,
+      driver_banking_status: balance > 0 ? "غير مؤهل" : "مؤهل",
+    }));
+  };
+
+  const handleSendBalanceRequest = async () => {
+    if (!resolvedDriverId || requestLoading) return;
+    setRequestLoading(true);
+    try {
+      await sendDriverNotification(
+        resolvedDriverId,
+        "طلب سداد الرصيد",
+        `يرجى سداد الرصيد المستحق بقيمة ${Number(form.driver_balance || 0).toLocaleString("ar-SA")} ر.س`,
+      );
+      toast.success("تم إرسال الطلب للسائق");
+    } catch (err) {
+      toast.error(err.message || "فشل إرسال الطلب");
+    } finally {
+      setRequestLoading(false);
+    }
   };
 
   const handleCommissionChange = (val) => {
@@ -439,16 +661,6 @@ export default function AssignTripModal({
     }));
   };
 
-  const handleBankChange = (bankId) => {
-    const bank = banks.find((b) => String(b.id) === String(bankId));
-    setForm((p) => ({
-      ...p,
-      bank_id: bankId,
-      bank_name: bank?.name ?? "",
-      recipient_account: bank?.bank_number ?? p.recipient_account,
-    }));
-  };
-
   const resolvedTripId = fromTripPage ? String(fixedTripId) : form.trip_id.trim();
   const resolvedDriverId = fromDriverPage ? String(fixedDriverId) : form.driver_id;
 
@@ -494,6 +706,7 @@ export default function AssignTripModal({
       if (senderName) fd.append("sender_name", senderName);
       if (form.notes) fd.append("notes", form.notes);
       if (form.transfer_image) fd.append("transfer_image", form.transfer_image);
+      if (form.sales_id) fd.append("sales_id", form.sales_id);
 
       const res = await fetch(`${API_BASE}/trips/${resolvedTripId}/assign-driver`, {
         method: "POST",
@@ -502,6 +715,10 @@ export default function AssignTripModal({
       const json = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(json?.error || json?.message || `خطأ ${res.status}`);
 
+      saveDriverBankingData(resolvedDriverId, {
+        balance: form.driver_balance,
+        bankingStatus: form.driver_banking_status,
+      });
       toast.success(json.message || "تم إسناد الرحلة بنجاح");
       window.dispatchEvent(new CustomEvent("trips-list-refresh"));
 
@@ -530,6 +747,41 @@ export default function AssignTripModal({
     loading: driversLoading,
     disabled: loading,
     canAddDriver,
+  };
+
+  const renderAssignedDriverBalance = () => {
+    if (!resolvedDriverId) return null;
+    const isDebtor = form.driver_banking_status === "غير مؤهل";
+    return (
+      <ModalField label="رصيد السائق الحالي">
+        <div className="flex items-center gap-2">
+          <input
+            type="number"
+            min="0"
+            value={form.driver_balance}
+            onChange={(e) => handleAssignedBalanceChange(e.target.value)}
+            className={`${inputCls} flex-1`}
+            placeholder="0"
+            disabled={loading}
+          />
+          <span className={`shrink-0 rounded-lg px-3 py-2 text-xs font-bold ${
+            isDebtor ? "bg-red-50 text-red-600" : "bg-green-50 text-green-600"
+          }`}>
+            {isDebtor ? "غير مؤهل" : "مؤهل"}
+          </span>
+          {isDebtor && (
+            <button
+              type="button"
+              onClick={handleSendBalanceRequest}
+              disabled={loading || requestLoading}
+              className="shrink-0 rounded-xl bg-red-600 px-3 py-2 text-xs font-bold text-white hover:bg-red-700 disabled:opacity-50"
+            >
+              {requestLoading ? "جاري الإرسال..." : "إرسال طلب"}
+            </button>
+          )}
+        </div>
+      </ModalField>
+    );
   };
 
   const renderSenderField = (label = "اسم المرسل") => (
@@ -644,6 +896,7 @@ export default function AssignTripModal({
                 <ModalField label="السائق">
                   <input type="text" value={driverName || fixedDriverId} readOnly className={`${inputCls} bg-gray-50`} />
                 </ModalField>
+                {renderAssignedDriverBalance()}
                 <ModalField label="رقم الرحلة" required>
                   <input
                     type="number"
@@ -675,12 +928,51 @@ export default function AssignTripModal({
                   <DriverSearchSelect
                     {...driverSelectProps}
                     value={form.driver_id}
-                    onChange={(id) => set("driver_id", id)}
-                    onAddDriver={() => openAddDriver((id) => set("driver_id", id))}
+                    onChange={handleAssignDriverChange}
+                    onAddDriver={() => openAddDriver(handleAssignDriverChange)}
                   />
                 </ModalField>
+                {renderAssignedDriverBalance()}
               </>
             )}
+
+            <ModalField label="مندوب خدمة العملاء">
+              {!showOtherSales ? (
+                <button
+                  type="button"
+                  onClick={() => setShowOtherSales(true)}
+                  disabled={loading}
+                  className="w-full px-3 py-2.5 rounded-xl border border-[#c9a84c] text-[#c9a84c] text-sm font-bold hover:bg-amber-50 transition-colors disabled:opacity-50"
+                >
+                  يوجد موظف آخر
+                </button>
+              ) : (
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowOtherSales(false);
+                        set("sales_id", "");
+                      }}
+                      disabled={loading}
+                      className="text-[11px] text-gray-400 font-semibold hover:text-red-500 disabled:opacity-40"
+                    >
+                      إلغاء
+                    </button>
+                    <p className="text-[11px] text-gray-500">اختر من خدمة العملاء</p>
+                  </div>
+                  <SalesSearchSelect
+                    sales={salesList}
+                    value={form.sales_id}
+                    onChange={(id) => set("sales_id", id)}
+                    loading={salesLoading}
+                    disabled={loading}
+                    placeholder="ابحث بالاسم أو الهاتف..."
+                  />
+                </div>
+              )}
+            </ModalField>
           </div>
 
           <div className="bg-white rounded-xl border border-gray-100 p-4 space-y-3 shadow-sm">
@@ -719,8 +1011,9 @@ export default function AssignTripModal({
                   onChange={(e) => handleRecipientTypeChange(e.target.value)}
                   className={`${inputCls} appearance-none`}
                 >
-                  <option value="">اختر</option>
+                  <option value="" disabled hidden>اختر</option>
                   <option value="حسابنا">حسابنا</option>
+                  <option value="رصيد">رصيد</option>
                   <option value="غير">غير</option>
                 </select>
               </ModalField>
@@ -733,7 +1026,7 @@ export default function AssignTripModal({
                   onChange={(e) => handleTransferMethodChange(e.target.value)}
                   className={`${inputCls} appearance-none`}
                 >
-                  <option value="">اختر</option>
+                  <option value="" disabled hidden>اختر</option>
                   <option value="تحويل بنكي">تحويل بنكي</option>
                   <option value="كاش">كاش</option>
                   <option value="بوابة دفع">بوابة دفع</option>
@@ -752,26 +1045,13 @@ export default function AssignTripModal({
                 </ModalField>
                 {renderSenderField()}
                 {isBankTransfer && (
-                  <ModalField label="اسم البنك المستلم">
-                    <select
-                      value={form.bank_id}
-                      onChange={(e) => handleBankChange(e.target.value)}
-                      className={`${inputCls} appearance-none`}
-                      disabled={loading || banksLoading}
-                    >
-                      <option value="">
-                        {banksLoading
-                          ? "جاري تحميل البنوك..."
-                          : banks.length
-                            ? "اختر البنك"
-                            : "لا توجد بنوك — أضفها من إدارة النظام"}
-                      </option>
-                      {banks.map((bank) => (
-                        <option key={bank.id} value={bank.id}>
-                          {bank.name}
-                        </option>
-                      ))}
-                    </select>
+                  <ModalField label="بيانات البنك المستلم">
+                    <BankReadOnlyFields
+                      bank={selectedBank}
+                      loading={banksLoading}
+                      inputClass={inputCls}
+                      readOnlyInputClass={readOnlyInputClass}
+                    />
                   </ModalField>
                 )}
                 <ModalField label="صورة التحويل">

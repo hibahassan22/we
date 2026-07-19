@@ -3,7 +3,7 @@ import { useToast } from "../lib/toast";
 import { ConfirmModal } from "./ui/AppModal";
 import BrokerFormModal from "./brokers/BrokerFormModal.jsx";
 import BrokerDetailsView from "./brokers/BrokerDetailsView.jsx";
-import { fetchBrokers, deleteBroker } from "../services/brokerService.js";
+import { fetchBrokers, fetchBrokerById, deleteBroker } from "../services/brokerService.js";
 import { usePermissions } from "../hooks/usePermissions.js";
 import { PERMISSIONS } from "../lib/permissions.js";
 import { useGlobalSearch } from "../hooks/useGlobalSearch";
@@ -134,6 +134,17 @@ export default function BrokersPage() {
     exportToExcel(rows, "قائمة_الوسطاء", "الوسطاء");
   };
 
+  const openBrokerDetails = async (broker) => {
+    if (!broker?.id) return;
+    setSelectedBroker(broker);
+    try {
+      const detail = await fetchBrokerById(broker.id);
+      if (detail) setSelectedBroker(detail);
+    } catch (e) {
+      toast.error(e.message || "فشل تحميل تفاصيل الوسيط");
+    }
+  };
+
   const executeDelete = async () => {
     if (!modalState.broker?.id) return;
     setDeleteLoading(true);
@@ -258,11 +269,7 @@ export default function BrokersPage() {
                   <tr key={broker.id} className="border-b border-[#f0e9dc] bg-white/70 hover:bg-white transition-colors">
                     <td className="px-4 py-3.5">
                       <div className="flex items-center gap-2.5">
-                        {broker.photo_url ? (
-                          <img src={broker.photo_url} alt="" className="w-9 h-9 rounded-full object-cover shrink-0" />
-                        ) : (
-                          <Avatar name={broker.name} />
-                        )}
+                        <Avatar name={broker.name} />
                         <span className="font-medium text-gray-800">{broker.name}</span>
                       </div>
                     </td>
@@ -300,7 +307,7 @@ export default function BrokersPage() {
                         canView={canView}
                         canEdit={canEdit}
                         canDelete={canDelete}
-                        onView={() => setSelectedBroker(broker)}
+                        onView={() => openBrokerDetails(broker)}
                         onEdit={() => setModalState({ type: "edit", broker })}
                         onDelete={() => setModalState({ type: "delete", broker })}
                       />

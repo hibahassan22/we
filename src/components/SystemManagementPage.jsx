@@ -7,7 +7,7 @@ import {
   createBank,
   updateBank,
   deleteBank,
-  buildBankPayload,
+  bankFormFromItem,
 } from "../services/bankService.js";
 
 const BASE = "https://drivo1.elmoroj.com/api";
@@ -21,8 +21,10 @@ const EMPTY_EXPENSE = {
 };
 
 const EMPTY_BANK = {
-  name: "",
-  bank_number: "",
+  bank_name: "",
+  account_name: "",
+  account_number: "",
+  iban: "",
 };
 
 const TARGETS_INIT = [
@@ -149,20 +151,42 @@ function BankFormFields({ form, setForm, disabled }) {
       <div className="space-y-1">
         <label className="text-xs text-gray-500 text-right block">اسم البنك</label>
         <input
-          value={form.name}
-          onChange={(e) => setForm((p) => ({ ...p, name: e.target.value }))}
-          placeholder="مثال: الراجحي"
+          value={form.bank_name}
+          onChange={(e) => setForm((p) => ({ ...p, bank_name: e.target.value }))}
+          placeholder="مثال: بنك الراجحي"
           className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400 text-right placeholder-gray-300"
           dir="rtl"
           disabled={disabled}
         />
       </div>
       <div className="space-y-1">
-        <label className="text-xs text-gray-500 text-right block">رقم البنك</label>
+        <label className="text-xs text-gray-500 text-right block">اسم الحساب</label>
         <input
-          value={form.bank_number}
-          onChange={(e) => setForm((p) => ({ ...p, bank_number: e.target.value }))}
-          placeholder="مثال: 1234567890"
+          value={form.account_name}
+          onChange={(e) => setForm((p) => ({ ...p, account_name: e.target.value }))}
+          placeholder="مثال: شركة المروج"
+          className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400 text-right placeholder-gray-300"
+          dir="rtl"
+          disabled={disabled}
+        />
+      </div>
+      <div className="space-y-1">
+        <label className="text-xs text-gray-500 text-right block">رقم الحساب</label>
+        <input
+          value={form.account_number}
+          onChange={(e) => setForm((p) => ({ ...p, account_number: e.target.value }))}
+          placeholder="1234567890"
+          className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400 text-left placeholder-gray-300"
+          dir="ltr"
+          disabled={disabled}
+        />
+      </div>
+      <div className="space-y-1">
+        <label className="text-xs text-gray-500 text-right block">الآيبان</label>
+        <input
+          value={form.iban}
+          onChange={(e) => setForm((p) => ({ ...p, iban: e.target.value }))}
+          placeholder="SA038000000060801016751519"
           className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400 text-left placeholder-gray-300"
           dir="ltr"
           disabled={disabled}
@@ -173,10 +197,7 @@ function BankFormFields({ form, setForm, disabled }) {
 }
 
 function bankToForm(item) {
-  return {
-    name: item?.name ?? "",
-    bank_number: item?.bank_number ?? "",
-  };
+  return bankFormFromItem(item);
 }
 
 // ======= Shared delete button =======
@@ -516,10 +537,10 @@ function BanksTab() {
   }, [loadBanks]);
 
   const handleAdd = async () => {
-    if (!form.name.trim() || !form.bank_number.trim()) return;
+    if (!canSubmitForm(form)) return;
     setActionLoading(true);
     try {
-      await createBank(buildBankPayload(form));
+      await createBank(form);
       setForm(EMPTY_BANK);
       setShowModal(false);
       loadBanks();
@@ -537,10 +558,10 @@ function BanksTab() {
   };
 
   const handleEdit = async () => {
-    if (!editingItem || !editForm.name.trim() || !editForm.bank_number.trim()) return;
+    if (!editingItem || !canSubmitForm(editForm)) return;
     setActionLoading(true);
     try {
-      await updateBank(editingItem.id, buildBankPayload(editForm));
+      await updateBank(editingItem.id, editForm);
       setEditingItem(null);
       setEditForm(EMPTY_BANK);
       loadBanks();
@@ -567,7 +588,8 @@ function BanksTab() {
     }
   };
 
-  const canSubmitForm = (f) => f.name.trim() && f.bank_number.trim();
+  const canSubmitForm = (f) =>
+    f.bank_name.trim() && f.account_name.trim() && f.account_number.trim() && f.iban.trim();
 
   return (
     <div className="space-y-4">
@@ -609,8 +631,10 @@ function BanksTab() {
           {items.map((item) => (
             <div key={item.id} className="flex items-center justify-between bg-[#faf7f0] border border-gray-100 rounded-xl px-4 py-3">
               <div className="text-right space-y-0.5 min-w-0">
-                <p className="text-sm font-semibold text-gray-800">{item.name}</p>
-                <p className="text-xs text-gray-500" dir="ltr">{item.bank_number}</p>
+                <p className="text-sm font-semibold text-gray-800">{item.bank_name || item.name}</p>
+                <p className="text-xs text-gray-500">{item.account_name || "—"}</p>
+                <p className="text-xs text-gray-400" dir="ltr">{item.account_number || item.bank_number}</p>
+                {item.iban && <p className="text-[11px] text-gray-400 truncate" dir="ltr">{item.iban}</p>}
               </div>
               <div className="flex items-center gap-2 shrink-0">
                 {canMutate && <DeleteBtn onClick={() => setDeletingItem(item)} />}
@@ -674,7 +698,7 @@ function BanksTab() {
               </svg>
             </div>
             <p className="text-sm text-gray-500">
-              هل أنت متأكد أنك تريد حذف بنك <span className="font-bold text-gray-800">{deletingItem.name}</span>؟
+              هل أنت متأكد أنك تريد حذف بنك <span className="font-bold text-gray-800">{deletingItem.bank_name || deletingItem.name}</span>؟
             </p>
             <div className="flex gap-3 pt-2">
               <button

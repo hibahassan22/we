@@ -122,6 +122,7 @@ export function buildTripCreatePayload(form) {
   if (form.commissionTransferDate) payload.commission_transfer_date = form.commissionTransferDate;
   if (form.driverGender) payload.driver_gender = form.driverGender;
   if (form.driverNat) payload.driver_nationality = form.driverNat;
+  if (form.brokerId) payload.broker_id = Number(form.brokerId) || form.brokerId;
 
   if (form.customerId && form.clientName) {
     payload["الراكب الاساسي"] = buildPrimaryPassenger({

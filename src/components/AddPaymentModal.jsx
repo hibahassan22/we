@@ -4,11 +4,13 @@ import { toast } from "../lib/toast";
 import AppModal, { ModalField, modalInputClass } from "./ui/AppModal";
 import { addTripPayment, fetchTripDetailsById } from "../services/tripService.js";
 import { fetchAllDrivers } from "../services/driverSaleChatService.js";
-import { fetchBanks } from "../services/bankService.js";
+import { fetchBanks, applyBankSelection, getActiveBanks } from "../services/bankService.js";
+import BankReadOnlyFields from "./ui/BankReadOnlyFields.jsx";
 import DriverFormModal from "./drivers/DriverFormModal.jsx";
 import { usePermissions } from "../hooks/usePermissions.js";
 import { PERMISSIONS } from "../lib/permissions.js";
 import { getDriverBankAccount } from "../lib/driverUtils.js";
+import { getDriverBankingData, saveDriverBankingData } from "../lib/driverBanking.js";
 
 const readOnlyInputClass = `${modalInputClass} bg-gray-50 text-gray-600 cursor-not-allowed`;
 
@@ -30,6 +32,8 @@ const createEmptyForm = (totalPrice = "") => ({
   commission_transfer_date: "",
   payment_note: "",
   transfer_image: null,
+  driver_balance: "",
+  driver_banking_status: "",
 });
 
 function getDriverName(driver) {
@@ -232,6 +236,7 @@ export default function AddPaymentModal({ isOpen, onClose, tripId, tripTotalPric
   const wasOpenRef = useRef(false);
 
   const isOurAccount = formData.recipient_type === "حسابنا";
+  const isBalanceRecipient = formData.recipient_type === "رصيد";
   const isBankTransfer = isOurAccount && formData.transfer_method === "تحويل بنكي";
   const isCash = isOurAccount && formData.transfer_method === "كاش";
   const isPaymentGateway = isOurAccount && formData.transfer_method === "بوابة دفع";
@@ -304,6 +309,25 @@ export default function AddPaymentModal({ isOpen, onClose, tripId, tripTotalPric
 
   const tripSenderName = resolvedAssignedDriver ? getDriverName(resolvedAssignedDriver) : "";
 
+  useEffect(() => {
+    if (!isOpen || !resolvedAssignedDriver) return;
+    const banking = getDriverBankingData(resolvedAssignedDriver);
+    setFormData((current) => ({
+      ...current,
+      driver_balance: String(banking.balance),
+      driver_banking_status: banking.bankingStatus,
+    }));
+  }, [isOpen, resolvedAssignedDriver]);
+
+  const handleAssignedBalanceChange = (value) => {
+    const balance = Math.max(0, Number(value) || 0);
+    setFormData((current) => ({
+      ...current,
+      driver_balance: value,
+      driver_banking_status: balance > 0 ? "غير مؤهل" : "مؤهل",
+    }));
+  };
+
   const selectedSender = useMemo(
     () => drivers.find((d) => String(d.id) === String(formData.sender_driver_id)),
     [drivers, formData.sender_driver_id]
@@ -320,6 +344,23 @@ export default function AddPaymentModal({ isOpen, onClose, tripId, tripTotalPric
   );
 
   const isOtherRecipient = formData.recipient_type === "غير";
+
+  const selectedBank = useMemo(
+    () => banks.find((b) => String(b.id) === String(formData.bank_id)),
+    [banks, formData.bank_id],
+  );
+
+  useEffect(() => {
+    if (!isOpen || !isBankTransfer || banksLoading) return;
+    const activeBanks = getActiveBanks(banks);
+    if (!activeBanks.length) return;
+    setFormData((current) => {
+      if (current.bank_id && activeBanks.some((b) => String(b.id) === String(current.bank_id))) {
+        return current;
+      }
+      return { ...current, ...applyBankSelection(activeBanks[0]) };
+    });
+  }, [isOpen, isBankTransfer, banks, banksLoading]);
 
   // املأ سائق الرحلة تلقائياً في: تحويل بنكي / بوابة دفع / كاش / غير — إن لم يُفعَّل «مرسل آخر»
   useEffect(() => {
@@ -461,16 +502,6 @@ export default function AddPaymentModal({ isOpen, onClose, tripId, tripTotalPric
     }));
   };
 
-  const handleBankChange = (bankId) => {
-    const bank = banks.find((b) => String(b.id) === String(bankId));
-    setFormData((p) => ({
-      ...p,
-      bank_id: bankId,
-      bank_name: bank?.name ?? "",
-      recipient_account: bank?.bank_number ?? p.recipient_account,
-    }));
-  };
-
   const handleClose = useCallback(() => {
     setFormData(createEmptyForm());
     setUseOtherSender(false);
@@ -607,6 +638,14 @@ export default function AddPaymentModal({ isOpen, onClose, tripId, tripTotalPric
     try {
       const json = await addTripPayment(tripId, payload);
 
+      const driverId = resolvedAssignedDriver?.id ?? formData.sender_driver_id ?? formData.driver_id;
+      if (driverId) {
+        saveDriverBankingData(driverId, {
+          balance: formData.driver_balance,
+          bankingStatus: formData.driver_banking_status,
+        });
+      }
+
       toast.success(json.message || "تمت إضافة الدفعة بنجاح");
       onSuccess?.(json, {
         amount_paid: formData.amount_paid,
@@ -680,6 +719,29 @@ export default function AddPaymentModal({ isOpen, onClose, tripId, tripTotalPric
             />
           </ModalField>
 
+          {resolvedAssignedDriver && (
+            <ModalField label="رصيد السائق الحالي">
+              <div className="flex items-center gap-2">
+                <input
+                  type="number"
+                  min="0"
+                  value={formData.driver_balance}
+                  onChange={(e) => handleAssignedBalanceChange(e.target.value)}
+                  className={`${modalInputClass} flex-1`}
+                  placeholder="0"
+                  disabled={isSubmitting}
+                />
+                <span className={`shrink-0 rounded-lg px-3 py-2 text-xs font-bold ${
+                  formData.driver_banking_status === "غير مؤهل"
+                    ? "bg-red-50 text-red-600"
+                    : "bg-green-50 text-green-600"
+                }`}>
+                  {formData.driver_banking_status === "غير مؤهل" ? "غير مؤهل" : "مؤهل"}
+                </span>
+              </div>
+            </ModalField>
+          )}
+
           <ModalField label="نوع المستلم" required>
             <select
               value={formData.recipient_type}
@@ -688,8 +750,9 @@ export default function AddPaymentModal({ isOpen, onClose, tripId, tripTotalPric
               disabled={isSubmitting}
               required
             >
-              <option value="">اختر</option>
+              <option value="" disabled hidden>اختر</option>
               <option value="حسابنا">حسابنا</option>
+              <option value="رصيد">رصيد</option>
               <option value="غير">غير</option>
             </select>
           </ModalField>
@@ -703,7 +766,7 @@ export default function AddPaymentModal({ isOpen, onClose, tripId, tripTotalPric
                 disabled={isSubmitting}
                 required
               >
-                <option value="">اختر</option>
+                <option value="" disabled hidden>اختر</option>
                 <option value="تحويل بنكي">تحويل بنكي</option>
                 <option value="كاش">كاش</option>
                 <option value="بوابة دفع">بوابة دفع</option>
@@ -773,27 +836,13 @@ export default function AddPaymentModal({ isOpen, onClose, tripId, tripTotalPric
               </ModalField>
 
               {isBankTransfer && (
-                <ModalField label="اسم البنك المستلم" required>
-                  <select
-                    value={formData.bank_id}
-                    onChange={(e) => handleBankChange(e.target.value)}
-                    className={modalInputClass}
-                    disabled={isSubmitting || banksLoading}
-                    required
-                  >
-                    <option value="">
-                      {banksLoading
-                        ? "جاري تحميل البنوك..."
-                        : banks.length
-                          ? "اختر البنك"
-                          : "لا توجد بنوك — أضفها من إدارة النظام"}
-                    </option>
-                    {banks.map((bank) => (
-                      <option key={bank.id} value={bank.id}>
-                        {bank.name}
-                      </option>
-                    ))}
-                  </select>
+                <ModalField label="بيانات البنك المستلم" required>
+                  <BankReadOnlyFields
+                    bank={selectedBank}
+                    loading={banksLoading}
+                    inputClass={modalInputClass}
+                    readOnlyInputClass={readOnlyInputClass}
+                  />
                 </ModalField>
               )}
 

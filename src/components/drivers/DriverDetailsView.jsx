@@ -376,6 +376,138 @@ function DriverTripsTab({ driverId, driverName, tripsCount, totalDues, refreshKe
   );
 }
 
+function tripFinancials(trip) {
+  const total = Number(trip.total_price ?? trip.price ?? 0) || 0;
+  const paid = Number(trip.amount_paid ?? trip.paid_amount ?? 0) || 0;
+  const remaining = Number(trip.remaining_amount ?? 0) || Math.max(0, total - paid);
+  const commission = Number(trip.our_commission ?? trip.commission_amount ?? trip.commission ?? 0) || 0;
+  const payments = Array.isArray(trip.payments) ? trip.payments : [];
+  const paymentsCount = payments.length || Number(trip.payments_count ?? 0) || 0;
+  return { total, paid, remaining, commission, paymentsCount };
+}
+
+function DriverFinancialsTab({ driverId, refreshKey = 0 }) {
+  const [trips, setTrips] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [page, setPage] = useState(1);
+  const PER_PAGE = 8;
+
+  useEffect(() => {
+    if (!driverId) return;
+    setLoading(true);
+    fetch(`${BASE}/driver-trips/${driverId}`)
+      .then((r) => r.json())
+      .then((d) => { setTrips(Array.isArray(d.trips) ? d.trips : []); setLoading(false); })
+      .catch(() => setLoading(false));
+  }, [driverId, refreshKey]);
+
+  const totals = trips.reduce(
+    (acc, t) => {
+      const f = tripFinancials(t);
+      acc.total += f.total;
+      acc.paid += f.paid;
+      acc.remaining += f.remaining;
+      acc.commission += f.commission;
+      return acc;
+    },
+    { total: 0, paid: 0, remaining: 0, commission: 0 }
+  );
+
+  const totalPages = Math.max(1, Math.ceil(trips.length / PER_PAGE));
+  const paged = trips.slice((page - 1) * PER_PAGE, page * PER_PAGE);
+  const pageNumbers = getPageNumbers(page, totalPages);
+
+  const summaryCards = [
+    { label: "إجمالي أسعار الرحلات", value: totals.total, cls: "text-gray-800" },
+    { label: "إجمالي المدفوع", value: totals.paid, cls: "text-green-600" },
+    { label: "إجمالي المتبقي", value: totals.remaining, cls: "text-red-600" },
+    { label: "إجمالي عمولتنا", value: totals.commission, cls: "text-[#bd8b2a]" },
+  ];
+
+  if (loading) {
+    return (
+      <div className="flex justify-center py-10">
+        <div className="w-8 h-8 border-4 border-[#c9a84c] border-t-transparent rounded-full animate-spin" />
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4" dir="rtl">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        {summaryCards.map((c) => (
+          <div key={c.label} className="border border-gray-100 rounded-xl p-4 bg-white shadow-sm text-right">
+            <p className={`text-lg font-bold ${c.cls}`}>{fmtMoney(c.value)} ر.س</p>
+            <p className="text-xs text-gray-400 mt-1">{c.label}</p>
+          </div>
+        ))}
+      </div>
+
+      {trips.length === 0 ? (
+        <p className="text-center text-sm text-gray-400 py-8">لا توجد رحلات لعرض تفاصيلها المالية</p>
+      ) : (
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm text-right">
+              <thead>
+                <tr className="bg-[#f9f6f0] border-b border-gray-100">
+                  {["الرحلة", "التاريخ", "الحالة", "سعر الرحلة", "المدفوع", "عدد الدفعات", "المتبقي", "عمولتنا"].map((h) => (
+                    <th key={h} className="px-4 py-3 text-xs font-semibold text-gray-500 whitespace-nowrap">{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {paged.map((trip) => {
+                  const tripId = trip.id ?? trip.trip_id;
+                  const st = tripStatusInfo(trip.trip_status ?? trip.status);
+                  const f = tripFinancials(trip);
+                  const dateFrom = trip.start_date ?? trip.date_from ?? trip.trip_date;
+                  return (
+                    <tr key={tripId} className="border-b border-gray-50 hover:bg-gray-50/60 transition-colors">
+                      <td className="px-4 py-3 font-bold text-gray-800 whitespace-nowrap">#{tripId}</td>
+                      <td className="px-4 py-3 text-gray-500 whitespace-nowrap">{fmtTripDate(dateFrom)}</td>
+                      <td className="px-4 py-3"><span className={`${st.cls} text-xs px-2.5 py-0.5 rounded-full font-medium`}>{st.label}</span></td>
+                      <td className="px-4 py-3 font-semibold text-gray-800 whitespace-nowrap">{fmtMoney(f.total)} ر.س</td>
+                      <td className="px-4 py-3 font-semibold text-green-600 whitespace-nowrap">{fmtMoney(f.paid)} ر.س</td>
+                      <td className="px-4 py-3 text-gray-600 text-center">{f.paymentsCount}</td>
+                      <td className={`px-4 py-3 font-semibold whitespace-nowrap ${f.remaining > 0 ? "text-red-600" : "text-gray-500"}`}>{fmtMoney(f.remaining)} ر.س</td>
+                      <td className="px-4 py-3 font-semibold text-[#bd8b2a] whitespace-nowrap">{fmtMoney(f.commission)} ر.س</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+              <tfoot>
+                <tr className="bg-[#f9f6f0] border-t border-gray-200 font-bold text-gray-800">
+                  <td className="px-4 py-3 whitespace-nowrap" colSpan={3}>الإجمالي</td>
+                  <td className="px-4 py-3 whitespace-nowrap">{fmtMoney(totals.total)} ر.س</td>
+                  <td className="px-4 py-3 text-green-600 whitespace-nowrap">{fmtMoney(totals.paid)} ر.س</td>
+                  <td className="px-4 py-3" />
+                  <td className="px-4 py-3 text-red-600 whitespace-nowrap">{fmtMoney(totals.remaining)} ر.س</td>
+                  <td className="px-4 py-3 text-[#bd8b2a] whitespace-nowrap">{fmtMoney(totals.commission)} ر.س</td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+
+          {trips.length > PER_PAGE && (
+            <div className="flex items-center justify-center gap-1.5 py-3">
+              <button type="button" onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page === 1} className="w-8 h-8 flex items-center justify-center rounded-full border border-gray-200 text-gray-500 hover:bg-gray-50 disabled:opacity-40 text-sm">›</button>
+              {pageNumbers.map((n, i) =>
+                n === "…" ? (
+                  <span key={`ellipsis-${i}`} className="w-8 h-8 flex items-center justify-center text-gray-400 text-xs">…</span>
+                ) : (
+                  <button key={n} type="button" onClick={() => setPage(n)} className={`w-8 h-8 rounded-full text-xs font-bold border transition-colors ${page === n ? "bg-[#c9a84c] text-white border-[#c9a84c]" : "border-gray-200 text-gray-600 hover:bg-gray-50"}`}>{n}</button>
+                )
+              )}
+              <button type="button" onClick={() => setPage((p) => Math.min(totalPages, p + 1))} disabled={page === totalPages} className="w-8 h-8 flex items-center justify-center rounded-full border border-gray-200 text-gray-500 hover:bg-gray-50 disabled:opacity-40 text-sm">‹</button>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 const VIOLATION_TYPE = {
   تنبيه: { cls: "bg-blue-100 text-blue-600 border border-blue-200" },
   إنذار: { cls: "bg-red-100 text-red-500 border border-red-200" },
@@ -646,6 +778,7 @@ export default function DriverDetailsView({
   const tabs = [
     { id: "personal", label: "المعلومات الشخصية" },
     { id: "trips", label: "سجل الرحلات" },
+    { id: "financials", label: "التفاصيل المالية" },
     { id: "violations", label: "المخالفات والتنبيهات" },
     { id: "notes", label: "الملاحظات" },
     { id: "ratings", label: "التقييمات" },
@@ -782,6 +915,10 @@ export default function DriverDetailsView({
 
         {activeTab === "trips" && (
           <DriverTripsTab driverId={driverId} driverName={fullName} tripsCount={d?.trips_count} totalDues={d?.total_dues} refreshKey={tripsRefreshKey} />
+        )}
+
+        {activeTab === "financials" && (
+          <DriverFinancialsTab driverId={driverId} refreshKey={tripsRefreshKey} />
         )}
 
         {activeTab === "notes" && (

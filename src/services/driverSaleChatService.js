@@ -100,18 +100,78 @@ function sortMessages(messages) {
   );
 }
 
-/** POST /api/driver-sale-chat/send */
-export async function sendDriverSaleChatMessage({ senderId, receiverId, message }) {
+/** POST /api/driver-sale-chat/send — يدعم المرفقات (صور) عبر form-data */
+export async function sendDriverSaleChatMessage({ senderId, receiverId, message, attachments = [] }) {
+  const files = Array.isArray(attachments) ? attachments.filter(Boolean) : [];
+  const text = String(message ?? "").trim();
+
+  if (files.length > 0) {
+    const fd = new FormData();
+    fd.append("sender_id", senderId);
+    fd.append("receiver_id", receiverId);
+    fd.append("message", text);
+    files.forEach((file) => fd.append("attachments[]", file));
+    const res = await fetch(`${API_BASE}/driver-sale-chat/send`, {
+      method: "POST",
+      headers: { Accept: "application/json" },
+      body: fd,
+    });
+    return parseJsonResponse(res);
+  }
+
   const res = await fetch(`${API_BASE}/driver-sale-chat/send`, {
     method: "POST",
     headers: { "Content-Type": "application/json", Accept: "application/json" },
     body: JSON.stringify({
       sender_id: senderId,
       receiver_id: receiverId,
-      message: String(message ?? "").trim(),
+      message: text,
     }),
   });
   return parseJsonResponse(res);
+}
+
+/** مرفقات الرسالة كمصفوفة روابط */
+export function messageAttachments(m) {
+  const raw = m?.attachments ?? m?.attachment ?? m?.files;
+  if (Array.isArray(raw)) return raw.filter(Boolean);
+  if (typeof raw === "string" && raw.trim()) {
+    try {
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed.filter(Boolean) : [raw];
+    } catch {
+      return [raw];
+    }
+  }
+  return [];
+}
+
+const MAP_LINK_RE = /https?:\/\/(?:www\.)?(?:google\.[^/\s]+\/maps\S+|maps\.google\.[^/\s]+\S*|maps\.app\.goo\.gl\/\S+|goo\.gl\/maps\/\S+)/i;
+
+/** يكتشف رسالة الموقع (رابط خرائط) ويستخرج الإحداثيات إن وُجدت */
+export function parseLocationMessage(text) {
+  if (!text) return null;
+  const str = String(text);
+  const match = str.match(MAP_LINK_RE);
+  if (!match) return null;
+  const url = match[0];
+  const coord =
+    url.match(/@(-?\d+\.\d+),(-?\d+\.\d+)/) ||
+    url.match(/[?&]q=(-?\d+\.\d+),(-?\d+\.\d+)/) ||
+    url.match(/[?&]query=(-?\d+\.\d+),(-?\d+\.\d+)/) ||
+    url.match(/[?&]destination=(-?\d+\.\d+),(-?\d+\.\d+)/);
+  return {
+    url,
+    lat: coord ? Number(coord[1]) : null,
+    lng: coord ? Number(coord[2]) : null,
+  };
+}
+
+/** حالة قراءة الرسالة (لعرض علامات الصح) */
+export function isMessageRead(m) {
+  const status = String(m?.status ?? "").toLowerCase();
+  const flag = m?.is_read ?? m?.read ?? m?.seen ?? m?.read_at ?? m?.seen_at ?? null;
+  return Boolean(flag) || status === "read" || status === "seen";
 }
 
 export function resolvePartnerId(chat, myId = "") {

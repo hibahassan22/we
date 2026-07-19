@@ -2,12 +2,13 @@ import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { Upload } from "lucide-react";
 import AppModal, { ModalField, modalInputClass } from "../ui/AppModal";
 import {
-  sanitizePhoneInput,
-  validatePhoneTenDigits,
-  normalizeSaudiPhoneFromApi,
+  sanitizePhoneInputFiveStart,
+  validatePhoneTenDigitsFiveStart,
+  normalizeSaudiPhoneForInputFiveStart,
 } from "../../lib/phoneValidation.js";
 import { createBroker, updateBroker, generateBrokerCode } from "../../services/brokerService.js";
 import { fetchAllDrivers } from "../../services/driverSaleChatService.js";
+import { normalizeMediaUrl } from "../../lib/driverMedia.js";
 
 const EMPTY_FORM = {
   name: "",
@@ -22,6 +23,9 @@ const EMPTY_FORM = {
   driver_id: "",
   notes: "",
   photo: null,
+  bank_name: "",
+  account_owner: "",
+  account_number: "",
 };
 
 function getDriverName(d) {
@@ -32,15 +36,24 @@ function getDriverIdentity(d) {
   return String(d?.identity_number ?? d?.national_id ?? d?.id_number ?? d?.iqama ?? "").trim();
 }
 
+function driverFinancialFromDriver(d) {
+  return {
+    bank_name: d?.bank_name || "",
+    account_owner: d?.account_owner || getDriverName(d) || "",
+    account_number: d?.bank_account_number || d?.account_number || "",
+  };
+}
+
 function driverToForm(d) {
   return {
     name: getDriverName(d),
-    phone: normalizeSaudiPhoneFromApi(d?.phone || ""),
+    phone: normalizeSaudiPhoneForInputFiveStart(d?.phone || ""),
     email: d?.email || "",
     address: d?.address || "",
     nationality: d?.nationality || "سعودي",
     identity_number: getDriverIdentity(d),
     driver_id: d?.id != null ? String(d.id) : "",
+    ...driverFinancialFromDriver(d),
   };
 }
 
@@ -62,7 +75,7 @@ function DriverPhoneSearch({
     [drivers, selectedId]
   );
   const selectedLabel = selected
-    ? `${getDriverName(selected)} — ${normalizeSaudiPhoneFromApi(selected.phone || "")}`
+    ? `${getDriverName(selected)} — ${normalizeSaudiPhoneForInputFiveStart(selected.phone || "")}`
     : "";
 
   useEffect(() => {
@@ -137,7 +150,7 @@ function DriverPhoneSearch({
                     onMouseDown={(e) => e.preventDefault()}
                     onClick={() => {
                       onSelect(d);
-                      setQuery(`${getDriverName(d)} — ${normalizeSaudiPhoneFromApi(d.phone || "")}`);
+                      setQuery(`${getDriverName(d)} — ${normalizeSaudiPhoneForInputFiveStart(d.phone || "")}`);
                       setOpen(false);
                     }}
                     className={`w-full px-3 py-2.5 text-sm text-right hover:bg-amber-50 transition-colors ${
@@ -146,7 +159,7 @@ function DriverPhoneSearch({
                   >
                     <span className="block">{getDriverName(d)}</span>
                     <span className="block text-[11px] text-gray-400 mt-0.5" dir="ltr">
-                      {normalizeSaudiPhoneFromApi(d.phone || "") || "—"}
+                      {normalizeSaudiPhoneForInputFiveStart(d.phone || "") || "—"}
                     </span>
                   </button>
                 </li>
@@ -247,19 +260,22 @@ export default function BrokerFormModal({ isOpen, onClose, brokerData, onSaved, 
     if (brokerData) {
       setForm({
         name: brokerData.name || "",
-        phone: normalizeSaudiPhoneFromApi(brokerData.phone || ""),
+        phone: normalizeSaudiPhoneForInputFiveStart(brokerData.phone || ""),
         email: brokerData.email || "",
         address: brokerData.address || "",
-        broker_code: brokerData.broker_code || "",
+        broker_code: brokerData.broker_code || brokerData.code || "",
         commission: String(brokerData.commission ?? 5),
-        commission_type: brokerData.commission_type || "نسبة مئوية",
+        commission_type: brokerData.commission_type || "نقدي",
         nationality: brokerData.nationality || "سعودي",
-        identity_number: brokerData.identity_number || "",
+        identity_number: brokerData.identity_number || brokerData.national_id || "",
         driver_id: brokerData.driver_id ? String(brokerData.driver_id) : "",
         notes: brokerData.notes || "",
         photo: null,
+        bank_name: brokerData.bank_name || "",
+        account_owner: brokerData.account_owner || brokerData.account_holder_name || "",
+        account_number: brokerData.account_number || brokerData.bank_account_number || "",
       });
-      setPhotoPreview(brokerData.photo_url || "");
+      setPhotoPreview(brokerData.national_id_image_raw || brokerData.national_id_image || brokerData.photo_url || "");
       setStep("form");
       setFromDriver(Boolean(brokerData.driver_id));
     } else {
@@ -278,7 +294,7 @@ export default function BrokerFormModal({ isOpen, onClose, brokerData, onSaved, 
     return () => ctrl.abort();
   }, [isOpen, isEditing]);
 
-  const phoneValidation = useMemo(() => validatePhoneTenDigits(form.phone), [form.phone]);
+  const phoneValidation = useMemo(() => validatePhoneTenDigitsFiveStart(form.phone), [form.phone]);
   const phoneInvalid = form.phone.length > 0 && !phoneValidation.valid;
 
   const u = (key) => (e) => setForm((p) => ({ ...p, [key]: e.target.value }));
@@ -304,16 +320,16 @@ export default function BrokerFormModal({ isOpen, onClose, brokerData, onSaved, 
   };
 
   const startManualAdd = (queryHint = "") => {
-    const digits = String(queryHint).replace(/\D/g, "").slice(-10);
+    const digits = sanitizePhoneInputFiveStart(queryHint);
     setFromDriver(false);
     setStep("form");
-    setForm((p) => ({
+    setForm({
       ...EMPTY_FORM,
       broker_code: generateBrokerCode(),
       commission_type: "نقدي",
       commission: "5",
-      phone: digits.startsWith("5") ? sanitizePhoneInput(digits) : "",
-    }));
+      phone: digits.startsWith("5") ? digits : "",
+    });
   };
 
   const handlePhoto = (file) => {
@@ -348,15 +364,48 @@ export default function BrokerFormModal({ isOpen, onClose, brokerData, onSaved, 
       onToast?.("error", "أدخل قيمة العمولة");
       return;
     }
+    if (!form.bank_name.trim()) {
+      onToast?.("error", "أدخل اسم البنك");
+      return;
+    }
+    if (!form.account_owner.trim()) {
+      onToast?.("error", "أدخل اسم صاحب الحساب رباعي");
+      return;
+    }
+    if (!fromDriver) {
+      const ownerParts = form.account_owner.trim().split(/\s+/).filter(Boolean);
+      if (ownerParts.length < 4) {
+        onToast?.("error", "اسم صاحب الحساب يجب أن يكون رباعي (4 أسماء)");
+        return;
+      }
+    }
+    if (!form.account_number.trim()) {
+      onToast?.("error", "أدخل رقم الحساب");
+      return;
+    }
+    if (!isEditing && !(form.photo instanceof File) && !fromDriver) {
+      onToast?.("error", "أضف صورة الهوية");
+      return;
+    }
 
     setSaving(true);
     try {
       const payload = {
-        ...form,
         name: form.name.trim(),
+        code: form.broker_code.trim(),
+        broker_code: form.broker_code.trim(),
+        phone: form.phone,
+        national_id: form.identity_number.trim(),
+        identity_number: form.identity_number.trim(),
         commission: Number(form.commission) || 0,
         commission_type: form.commission_type,
-        identity_number: form.identity_number.trim(),
+        bank_name: form.bank_name.trim(),
+        account_number: form.account_number.trim(),
+        account_holder_name: form.account_owner.trim(),
+        account_owner: form.account_owner.trim(),
+        national_id_image: form.photo,
+        photo: form.photo,
+        driver_id: form.driver_id || undefined,
       };
       let saved;
       if (isEditing) {
@@ -398,7 +447,7 @@ export default function BrokerFormModal({ isOpen, onClose, brokerData, onSaved, 
             />
           </ModalField>
           <p className="text-xs text-gray-400 text-right leading-relaxed">
-            لو لقيتِ سائق هيتملي الاسم والهاتف ورقم الهوية تلقائي، وتكمّلي الكود والعمولة والصورة.
+            لو لقيتِ سائق هيتملي الاسم والهاتف ورقم الهوية والبيانات البنكية تلقائي، وتكمّلي الكود والعمولة والصورة.
             لو مفيش نتائج هيظهر زر «إضافة وسيط» عشان تدخلي البيانات يدوي.
           </p>
         </div>
@@ -443,14 +492,19 @@ export default function BrokerFormModal({ isOpen, onClose, brokerData, onSaved, 
                 dir="ltr"
               />
             </ModalField>
-            <ModalField label="رقم الهاتف" required>
+            <ModalField
+              label="رقم الهاتف"
+              required
+              hint={phoneInvalid ? phoneValidation.message : "10 أرقام تبدأ بـ 5 — مثال: 5xxxxxxxxx"}
+            >
               <div className="flex gap-2" dir="ltr">
                 <span className="shrink-0 px-3 py-2.5 rounded-xl border border-gray-200 bg-gray-50 text-sm text-gray-600">+966</span>
                 <input
                   value={form.phone}
-                  onChange={(e) => setForm((p) => ({ ...p, phone: sanitizePhoneInput(e.target.value) }))}
+                  onChange={(e) => setForm((p) => ({ ...p, phone: sanitizePhoneInputFiveStart(e.target.value) }))}
                   placeholder="5xxxxxxxxx"
                   maxLength={10}
+                  inputMode="numeric"
                   className={`${modalInputClass} ${phoneInvalid ? "border-red-300" : ""}`}
                   disabled={saving}
                 />
@@ -477,26 +531,67 @@ export default function BrokerFormModal({ isOpen, onClose, brokerData, onSaved, 
             disabled={saving}
           />
 
+          <div className="rounded-xl border border-gray-100 bg-gray-50/50 p-4 space-y-3">
+            <p className="text-sm font-bold text-[#c9a84c] text-right">
+              البيانات البنكية
+              {fromDriver && <span className="text-[11px] font-normal text-gray-400 mr-2">— من بيانات السائق</span>}
+            </p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <ModalField label="اسم البنك" required>
+                <input
+                  value={form.bank_name}
+                  onChange={u("bank_name")}
+                  placeholder="ادخل اسم البنك"
+                  className={modalInputClass}
+                  required
+                  disabled={saving}
+                />
+              </ModalField>
+              <ModalField label="رقم الحساب" required>
+                <input
+                  value={form.account_number}
+                  onChange={u("account_number")}
+                  placeholder="ادخل رقم الحساب"
+                  className={modalInputClass}
+                  required
+                  disabled={saving}
+                  dir="ltr"
+                  inputMode="numeric"
+                />
+              </ModalField>
+            </div>
+            <ModalField label="اسم صاحب الحساب رباعي" required hint="مثال: محمد أحمد علي سعيد">
+              <input
+                value={form.account_owner}
+                onChange={u("account_owner")}
+                placeholder="الاسم الرباعي لصاحب الحساب"
+                className={modalInputClass}
+                required
+                disabled={saving}
+              />
+            </ModalField>
+          </div>
+
           {!fromDriver && (
             <ModalField label="صورة الهوية">
-              <label className={`flex w-full cursor-pointer items-center gap-3 rounded-xl border border-gray-200 px-3 py-2.5 text-sm text-gray-500 hover:bg-gray-50 transition-colors ${saving ? "opacity-50 pointer-events-none" : ""}`}>
-                {photoPreview ? (
-                  <img src={photoPreview} alt="" className="w-12 h-12 rounded-lg object-cover shrink-0" />
-                ) : (
-                  <div className="w-12 h-12 rounded-lg bg-gray-100 flex items-center justify-center shrink-0">
-                    <Upload className="w-4 h-4 text-gray-400" />
-                  </div>
-                )}
-                <span className="flex-1 text-right">{form.photo?.name || (photoPreview ? "تغيير صورة الهوية" : "اختر صورة الهوية")}</span>
-                <input
-                  type="file"
-                  className="hidden"
-                  accept="image/*"
-                  disabled={saving}
-                  onChange={(e) => handlePhoto(e.target.files?.[0] ?? null)}
-                />
-              </label>
-            </ModalField>
+                <label className={`flex w-full cursor-pointer items-center gap-3 rounded-xl border border-gray-200 px-3 py-2.5 text-sm text-gray-500 hover:bg-gray-50 transition-colors ${saving ? "opacity-50 pointer-events-none" : ""}`}>
+                  {photoPreview ? (
+                    <img src={normalizeMediaUrl(photoPreview)} alt="" className="w-12 h-12 rounded-lg object-cover shrink-0" />
+                  ) : (
+                    <div className="w-12 h-12 rounded-lg bg-gray-100 flex items-center justify-center shrink-0">
+                      <Upload className="w-4 h-4 text-gray-400" />
+                    </div>
+                  )}
+                  <span className="flex-1 text-right">{form.photo?.name || (photoPreview ? "تغيير صورة الهوية" : "اختر صورة الهوية")}</span>
+                  <input
+                    type="file"
+                    className="hidden"
+                    accept="image/*"
+                    disabled={saving}
+                    onChange={(e) => handlePhoto(e.target.files?.[0] ?? null)}
+                  />
+                </label>
+              </ModalField>
           )}
 
           <button

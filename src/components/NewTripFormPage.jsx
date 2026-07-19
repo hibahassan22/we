@@ -4,7 +4,10 @@ import AppModal, { modalInputClass } from "./ui/AppModal";
 import { fetchSalesList } from "../services/salesService.js";
 import { createTripWithoutDriver } from "../services/tripService.js";
 import { fetchCustomersList } from "../services/customerService.js";
+import { fetchBrokers } from "../services/brokerService.js";
+import { NATIONALITY_OPTIONS } from "../services/cityService.js";
 import AddClientModal from "./clients/AddClientModal";
+import BrokerFormModal from "./brokers/BrokerFormModal.jsx";
 import { buildTripCreatePayload } from "../lib/tripFormUtils.js";
 import {
   sanitizePhoneInputFiveStart,
@@ -13,6 +16,7 @@ import {
 } from "../lib/phoneValidation.js";
 import { usePermissions } from "../hooks/usePermissions.js";
 import { PERMISSIONS } from "../lib/permissions.js";
+import { useToast } from "../lib/toast";
 
 // ── Map Picker Modal (OpenStreetMap + Leaflet via CDN) ─────────────
 function MapPickerModal({ title, onClose, onConfirm }) {
@@ -342,9 +346,168 @@ function CustomerSearchSelect({
   );
 }
 
-const Sel = ({ children, value, onChange }) => (
+function formatBrokerOption(b) {
+  const name = b?.name || "—";
+  const code = b?.broker_code || "";
+  const phone = b?.phone ? String(b.phone) : "";
+  return [name, code, phone].filter(Boolean).join(" — ");
+}
+
+function BrokerSearchSelect({
+  brokers,
+  value,
+  onChange,
+  loading,
+  disabled,
+  canAddBroker,
+  onAddBroker,
+}) {
+  const [query, setQuery] = useState("");
+  const [open, setOpen] = useState(false);
+  const containerRef = useRef(null);
+
+  const selected = useMemo(
+    () => brokers.find((b) => String(b.id) === String(value)),
+    [brokers, value]
+  );
+
+  useEffect(() => {
+    if (selected) setQuery(formatBrokerOption(selected));
+    else if (!open) setQuery("");
+  }, [selected, open]);
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q || (selected && query === formatBrokerOption(selected))) return brokers;
+    const qDigits = q.replace(/\D/g, "");
+    return brokers.filter((b) => {
+      const name = String(b.name || "").toLowerCase();
+      const code = String(b.broker_code || "").toLowerCase();
+      const phone = String(b.phone || "").replace(/\D/g, "");
+      return (
+        name.includes(q) ||
+        code.includes(q) ||
+        (qDigits && phone.includes(qDigits))
+      );
+    });
+  }, [brokers, query, selected]);
+
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      if (containerRef.current && !containerRef.current.contains(e.target)) {
+        setOpen(false);
+        if (selected) setQuery(formatBrokerOption(selected));
+        else setQuery("");
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [selected]);
+
+  const handleInputChange = (e) => {
+    const next = e.target.value;
+    setQuery(next);
+    setOpen(true);
+    if (selected && next !== formatBrokerOption(selected)) onChange("");
+  };
+
+  const handleSelect = (b) => {
+    onChange(String(b.id));
+    setQuery(formatBrokerOption(b));
+    setOpen(false);
+  };
+
+  const isSearching = query.trim().length > 0 && (!selected || query !== formatBrokerOption(selected));
+  const showAdd =
+    canAddBroker && isSearching && filtered.length === 0 && !loading;
+
+  return (
+    <div className="space-y-2">
+      <div ref={containerRef} className="flex gap-2 items-stretch">
+        <div className="relative flex-1 min-w-0">
+          <input
+            type="text"
+            value={query}
+            onChange={handleInputChange}
+            onFocus={() => !disabled && setOpen(true)}
+            disabled={disabled || loading}
+            placeholder={loading ? "جاري تحميل الوسطاء..." : "ابحث بالاسم أو الكود أو الهاتف..."}
+            className="w-full rounded-xl border border-gray-200 px-3 py-2.5 text-sm focus:border-[#c9a84c] focus:outline-none bg-white text-right placeholder-gray-300 disabled:opacity-60"
+            autoComplete="off"
+          />
+          <div className="absolute left-3 top-3 pointer-events-none text-gray-400">
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+            </svg>
+          </div>
+          {open && !disabled && !loading && (
+            <ul className="absolute z-50 mt-1 w-full max-h-80 overflow-y-auto rounded-xl border border-gray-200 bg-white shadow-lg py-1">
+              {filtered.length === 0 ? (
+                <li className="px-3 py-3 text-xs text-gray-400 text-right">
+                  {isSearching ? "لا توجد نتائج" : "لا يوجد وسطاء"}
+                </li>
+              ) : (
+                filtered.map((b) => (
+                  <li key={b.id}>
+                    <button
+                      type="button"
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => handleSelect(b)}
+                      className={`w-full px-3 py-3 text-sm text-right hover:bg-amber-50 transition-colors ${
+                        String(b.id) === String(value) ? "bg-amber-50 text-[#c9a84c] font-medium" : "text-gray-700"
+                      }`}
+                    >
+                      <span className="block font-medium">{b.name}</span>
+                      <span className="block text-xs text-gray-400 mt-0.5" dir="ltr">
+                        {[b.broker_code, b.phone].filter(Boolean).join(" · ")}
+                      </span>
+                    </button>
+                  </li>
+                ))
+              )}
+            </ul>
+          )}
+        </div>
+        {showAdd && (
+          <button
+            type="button"
+            onMouseDown={(e) => {
+              e.preventDefault();
+              onAddBroker?.();
+            }}
+            className="shrink-0 px-3 py-2 rounded-xl border border-[#c9a84c] text-[#c9a84c] text-xs font-bold hover:bg-amber-50 transition-colors whitespace-nowrap"
+          >
+            + إضافة وسيط
+          </button>
+        )}
+      </div>
+      {value && selected && (
+        <button
+          type="button"
+          onClick={() => onChange("")}
+          className="text-xs text-gray-400 hover:text-red-500"
+        >
+          إزالة الوسيط المختار
+        </button>
+      )}
+    </div>
+  );
+}
+
+const Sel = ({ children, value, onChange, placeholder }) => (
   <div className="relative">
-    <select value={value} onChange={onChange} className="w-full rounded-xl border border-gray-200 px-3 py-2.5 text-sm focus:border-[#c9a84c] focus:outline-none bg-white text-right appearance-none">{children}</select>
+    <select
+      value={value}
+      onChange={onChange}
+      className="w-full rounded-xl border border-gray-200 px-3 py-2.5 text-sm focus:border-[#c9a84c] focus:outline-none bg-white text-right appearance-none"
+    >
+      {placeholder != null && (
+        <option value="" disabled hidden>
+          {placeholder}
+        </option>
+      )}
+      {children}
+    </select>
     <div className="absolute left-3 top-3 pointer-events-none text-gray-400"><svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg></div>
   </div>
 );
@@ -358,8 +521,8 @@ const Toggle = ({ on, onToggle, label, sub }) => (
   </div>
 );
 
-const Section = ({ icon, title, sub, children }) => (
-  <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+const Section = ({ icon, title, sub, children, allowOverflow }) => (
+  <div className={`bg-white rounded-2xl border border-gray-100 shadow-sm ${allowOverflow ? "overflow-visible" : "overflow-hidden"}`}>
     <div className="flex items-center justify-end gap-3 px-5 py-4 border-b border-gray-50">
       <div className="text-right"><p className="text-sm font-bold text-gray-800">{title}</p>{sub && <p className="text-xs text-gray-400 mt-0.5">{sub}</p>}</div>
       <div className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0" style={{ background: "linear-gradient(135deg,#9C6402,#E6C76A)" }}>{icon}</div>
@@ -402,22 +565,55 @@ function MapPointButton({ label, hasCoords, onClick, placeholder = "اختر م�
   );
 }
 
-/** تاريخ — الضغط في أي مكان يفتح التقويم */
+/** تحويل YYYY-MM-DD → dd/mm/yy للعرض */
+function formatDateDDMMYY(iso) {
+  if (!iso || !/^\d{4}-\d{2}-\d{2}$/.test(iso)) return "";
+  const [y, m, d] = iso.split("-");
+  return `${d}/${m}/${y.slice(-2)}`;
+}
+
+/** تاريخ — تقويم، والعرض بصيغة dd/mm/yy */
 function DateInput({ value, onChange, className = "" }) {
   const ref = useRef(null);
+  const display = formatDateDDMMYY(value);
+
   const openPicker = () => {
-    try { ref.current?.showPicker?.(); } catch { /* ignore */ }
+    try {
+      ref.current?.showPicker?.();
+    } catch {
+      /* ignore */
+    }
     ref.current?.focus();
   };
+
   return (
-    <div className="relative cursor-pointer" onClick={openPicker}>
+    <div
+      className={`relative cursor-pointer ${className}`}
+      onClick={openPicker}
+      dir="ltr"
+    >
+      {/* العرض للمستخدم */}
+      <div
+        className={`w-full rounded-xl border border-gray-200 px-3 py-2.5 pl-9 text-sm bg-white text-left pointer-events-none ${
+          display ? "text-gray-800" : "text-gray-300"
+        }`}
+      >
+        {display || "dd/mm/yy"}
+      </div>
+      {/* التقويم الأصلي — شفاف فوق الحقل */}
       <input
         ref={ref}
         type="date"
-        value={value}
+        value={value || ""}
         onChange={(e) => onChange(e.target.value)}
-        className={`w-full rounded-xl border border-gray-200 px-3 py-2.5 text-sm focus:border-[#c9a84c] focus:outline-none bg-white text-right cursor-pointer ${className}`}
+        className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+        tabIndex={0}
       />
+      <div className="absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none text-gray-400">
+        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+        </svg>
+      </div>
     </div>
   );
 }
@@ -481,11 +677,11 @@ function ExceptionModal({ onClose }) {
       }
     >
       <div className="grid grid-cols-2 gap-3">
-        <Field label="إلى تاريخ">
-          <DateInput value={dateTo} onChange={setDateTo} />
-        </Field>
         <Field label="من تاريخ">
           <DateInput value={dateFrom} onChange={setDateFrom} />
+        </Field>
+        <Field label="إلى تاريخ">
+          <DateInput value={dateTo} onChange={setDateTo} />
         </Field>
       </div>
 
@@ -527,7 +723,9 @@ function CopyScheduleModal({ onClose }) {
     >
       <Field label="اختر اليوم">
         <Sel value={fromDay} onChange={e => setFromDay(e.target.value)}>
-          <option value="">اختر اليوم</option>
+          <option value="" disabled hidden>
+            اختر اليوم
+          </option>
           {DAYS.map(d => <option key={d.id} value={d.id}>{d.label}</option>)}
         </Sel>
       </Field>
@@ -575,15 +773,16 @@ function AddPassengerModal({ onClose, activeDays }) {
         {/* نوع الراكب + التصنيف */}
         <div className="grid grid-cols-2 gap-3">
           <Field label="التصنيف">
-            <Sel value={riderClass} onChange={e => setRiderClass(e.target.value)}>
-              <option value="">اختر التصنيف</option>
-              <option>موظف</option><option>طالب</option>
+            <Sel value={riderClass} onChange={e => setRiderClass(e.target.value)} placeholder="اختر التصنيف">
+              <option value="موظف">موظف</option>
+              <option value="طالب">طالب</option>
             </Sel>
           </Field>
           <Field label="نوع الراكب">
-            <Sel value={riderType} onChange={e => setRiderType(e.target.value)}>
-              <option value="">اختر النوع</option>
-              <option>ذكر</option><option>أنثى</option><option>طفل</option><option>غير</option>
+            <Sel value={riderType} onChange={e => setRiderType(e.target.value)} placeholder="اختر النوع">
+              <option value="ذكر">ذكر</option>
+              <option value="أنثى">أنثى</option>
+              <option value="طفل">طفل</option>
             </Sel>
           </Field>
         </div>
@@ -857,13 +1056,16 @@ function PassengerCard({ idx, activeDays, useMap, onToggleUseMap, sameTime, onTo
         {/* Classification + Gender */}
         <div className="grid grid-cols-2 gap-3">
           <Field label="جنس العميل">
-            <Sel value="ذكر" onChange={() => {}}>
-              <option>ذكر</option><option>أنثى</option><option>طفل</option><option>غير</option>
+            <Sel value="" onChange={() => {}} placeholder="اختر الجنس">
+              <option value="ذكر">ذكر</option>
+              <option value="أنثى">أنثى</option>
+              <option value="طفل">طفل</option>
             </Sel>
           </Field>
           <Field label="تصنيف العميل">
-            <Sel value="موظف" onChange={() => {}}>
-              <option>موظف</option><option>طالب</option>
+            <Sel value="" onChange={() => {}} placeholder="اختر التصنيف">
+              <option value="موظف">موظف</option>
+              <option value="طالب">طالب</option>
             </Sel>
           </Field>
         </div>
@@ -945,8 +1147,10 @@ function PassengerRow({ idx, onRemove }) {
 export default function NewTripFormPage() {
   const navigate = useNavigate();
   const { can } = usePermissions();
+  const toast = useToast();
   const canCreate = can(PERMISSIONS.TRIPS_ADS_CREATE) || can(PERMISSIONS.TRIPS_CREATE);
   const canAddClient = can(PERMISSIONS.CLIENTS_CREATE);
+  const canAddBroker = can(PERMISSIONS.BROKERS_CREATE) || can(PERMISSIONS.DRIVERS_CREATE);
 
   const [tripCard,    setTripCard]    = useState("subscription");
   const [passengers,  setPassengers]  = useState("single");
@@ -968,9 +1172,9 @@ export default function NewTripFormPage() {
   const [showAddClient, setShowAddClient] = useState(false);
   const [clientName,  setClientName]  = useState("");
   const [clientPhone, setClientPhone] = useState("");
-  const [nationality, setNationality] = useState("سعودي");
-  const [clientType,  setClientType]  = useState("موظف");
-  const [clientGender,setClientGender]= useState("ذكر");
+  const [nationality, setNationality] = useState("");
+  const [clientType,  setClientType]  = useState("");
+  const [clientGender,setClientGender]= useState("");
   const [fromCity,    setFromCity]    = useState("");
   const [toCity,      setToCity]      = useState("");
   const [departureTime, setDepartureTime] = useState("07:00");
@@ -1009,6 +1213,12 @@ export default function NewTripFormPage() {
   const [selectedSales, setSelectedSales] = useState([]);
   const toggleSale = (id) => setSelectedSales(p => p.includes(id) ? p.filter(x => x !== id) : [...p, id]);
 
+  // ── Broker (optional) ──────────────────────────────────────────
+  const [brokers, setBrokers] = useState([]);
+  const [brokersLoading, setBrokersLoading] = useState(true);
+  const [brokerId, setBrokerId] = useState("");
+  const [showAddBroker, setShowAddBroker] = useState(false);
+
   useEffect(() => {
     fetchSalesList()
       .then(setSalesList)
@@ -1023,7 +1233,20 @@ export default function NewTripFormPage() {
         setCustomersError(err.message || "فشل تحميل قائمة العملاء");
       })
       .finally(() => setCustomersLoading(false));
+    fetchBrokers()
+      .then(setBrokers)
+      .catch(() => setBrokers([]))
+      .finally(() => setBrokersLoading(false));
   }, []);
+
+  const handleBrokerAdded = (saved) => {
+    if (!saved?.id) return;
+    setBrokers((prev) => {
+      const exists = prev.some((b) => String(b.id) === String(saved.id));
+      return exists ? prev : [saved, ...prev];
+    });
+    setBrokerId(String(saved.id));
+  };
 
   const handleCustomerSelect = (id) => {
     setCustomerId(id);
@@ -1031,8 +1254,8 @@ export default function NewTripFormPage() {
     if (c) {
       setClientName(c.name ?? c.full_name ?? "");
       setClientPhone(normalizeSaudiPhoneForInputFiveStart(c.phone ?? ""));
-      setNationality(c.nationality ?? "سعودي");
-      setClientGender(c.gender === "أنثى" || c.gender === "female" ? "أنثى" : "ذكر");
+      setNationality(c.nationality ?? "");
+      setClientGender(c.gender === "أنثى" || c.gender === "female" ? "أنثى" : c.gender === "طفل" ? "طفل" : c.gender === "ذكر" || c.gender === "male" ? "ذكر" : "");
     }
   };
 
@@ -1046,8 +1269,16 @@ export default function NewTripFormPage() {
     setCustomerId(String(created.id));
     setClientName(created.name ?? created.full_name ?? "");
     setClientPhone(normalizeSaudiPhoneForInputFiveStart(created.phone ?? ""));
-    setNationality(created.nationality ?? "سعودي");
-    setClientGender(created.gender === "أنثى" || created.gender === "female" ? "أنثى" : "ذكر");
+    setNationality(created.nationality ?? "");
+    setClientGender(
+      created.gender === "أنثى" || created.gender === "female"
+        ? "أنثى"
+        : created.gender === "طفل"
+          ? "طفل"
+          : created.gender === "ذكر" || created.gender === "male"
+            ? "ذكر"
+            : ""
+    );
   };
 
   const phoneValidation = useMemo(() => validatePhoneTenDigitsFiveStart(clientPhone), [clientPhone]);
@@ -1174,6 +1405,7 @@ export default function NewTripFormPage() {
         bankName,
         accountNumber,
         ourCommission,
+        brokerId,
       });
 
       await createTripWithoutDriver(payload);
@@ -1273,8 +1505,8 @@ export default function NewTripFormPage() {
         icon={<svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>}>
         <div className="space-y-4">
           <div className="grid grid-cols-2 gap-3">
-            <Field label="إلى تاريخ"><DateInput value={dateTo} onChange={setDateTo} /></Field>
             <Field label="من تاريخ"><DateInput value={dateFrom} onChange={setDateFrom} /></Field>
+            <Field label="إلى تاريخ"><DateInput value={dateTo} onChange={setDateTo} /></Field>
           </div>
           <p className="text-xs font-semibold text-gray-600 text-right">أيام التشغيل *</p>
           <div className="flex gap-2 flex-wrap justify-end">
@@ -1284,11 +1516,9 @@ export default function NewTripFormPage() {
             <Field label="وقت الانطلاق *">
               <TimeInput value={departureTime} onChange={setDepartureTime} />
             </Field>
-            {direction === "both" && (
-              <Field label="وقت العودة *">
-                <TimeInput value={returnTime} onChange={setReturnTime} />
-              </Field>
-            )}
+            <Field label="وقت العودة *">
+              <TimeInput value={returnTime} onChange={setReturnTime} />
+            </Field>
           </div>
           <div className="flex items-center justify-between pt-1">
             <button
@@ -1423,21 +1653,24 @@ export default function NewTripFormPage() {
               <Field label="الاسم"><Input placeholder="ادخل الاسم" value={clientName} onChange={e => setClientName(e.target.value)} /></Field>
             </div>
             <Field label="الجنسية">
-              <Input placeholder="سعودي" value={nationality} onChange={(e) => setNationality(e.target.value)} />
+              <Sel value={nationality} onChange={(e) => setNationality(e.target.value)} placeholder="اختر الجنسية">
+                {NATIONALITY_OPTIONS.map((n) => (
+                  <option key={n} value={n}>{n}</option>
+                ))}
+              </Sel>
             </Field>
             <div className="grid grid-cols-2 gap-3">
               <Field label="جنس العميل">
-                <Sel value={clientGender} onChange={e => setClientGender(e.target.value)}>
-                  <option>ذكر</option>
-                  <option>أنثى</option>
-                  <option>طفل</option>
-                  <option>غير</option>
+                <Sel value={clientGender} onChange={e => setClientGender(e.target.value)} placeholder="اختر الجنس">
+                  <option value="ذكر">ذكر</option>
+                  <option value="أنثى">أنثى</option>
+                  <option value="طفل">طفل</option>
                 </Sel>
               </Field>
               <Field label="تصنيف العميل">
-                <Sel value={clientType} onChange={e => setClientType(e.target.value)}>
-                  <option>موظف</option>
-                  <option>طالب</option>
+                <Sel value={clientType} onChange={e => setClientType(e.target.value)} placeholder="اختر التصنيف">
+                  <option value="موظف">موظف</option>
+                  <option value="طالب">طالب</option>
                 </Sel>
               </Field>
             </div>
@@ -1451,17 +1684,15 @@ export default function NewTripFormPage() {
         <div className="space-y-4">
           <div className="grid grid-cols-2 gap-3">
             <Field label="نوع جنس السائق المطلوب (اختياري)">
-              <Sel value={driverGender} onChange={e => setDriverGender(e.target.value)}>
-                <option value="">غير ضرورى</option>
-                <option>ذكر</option>
-                <option>أنثى</option>
+              <Sel value={driverGender} onChange={e => setDriverGender(e.target.value)} placeholder="اختر الجنس">
+                <option value="ذكر">ذكر</option>
+                <option value="أنثى">أنثى</option>
               </Sel>
             </Field>
             <Field label="جنسية السائق المقترحة (اختياري)">
-              <Sel value={driverNat} onChange={e => setDriverNat(e.target.value)}>
-                <option value="">غير ضرورى</option>
-                <option>سعودي</option>
-                <option>غير سعودي</option>
+              <Sel value={driverNat} onChange={e => setDriverNat(e.target.value)} placeholder="اختر الجنسية">
+                <option value="سعودي">سعودي</option>
+                <option value="غير سعودي">غير سعودي</option>
               </Sel>
             </Field>
           </div>
@@ -1528,6 +1759,26 @@ export default function NewTripFormPage() {
         </div>
       </Section>
 
+      {/* الوسيط */}
+      <Section title="الوسيط" sub="اختياري — اختر وسيطاً أو أضف جديداً" allowOverflow
+        icon={<svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z" /></svg>}>
+        <Field label="وسيط">
+          <BrokerSearchSelect
+            brokers={brokers}
+            value={brokerId}
+            onChange={setBrokerId}
+            loading={brokersLoading}
+            canAddBroker={canAddBroker}
+            onAddBroker={() => setShowAddBroker(true)}
+          />
+        </Field>
+        {!brokersLoading && brokers.length === 0 && (
+          <p className="text-[11px] text-gray-400 text-right mt-2">
+            لا يوجد وسطاء — ابحثي واكتبي اسمًا وسيظهر زر «إضافة وسيط» لو مفيش نتائج.
+          </p>
+        )}
+      </Section>
+
       {/* Error message */}
       {submitError && (
         <div className="bg-red-50 border border-red-200 text-red-600 text-sm rounded-xl px-4 py-3 text-right">
@@ -1571,6 +1822,14 @@ export default function NewTripFormPage() {
         isOpen={showAddClient}
         onClose={() => setShowAddClient(false)}
         onSuccess={handleClientAdded}
+      />
+
+      <BrokerFormModal
+        isOpen={showAddBroker}
+        onClose={() => setShowAddBroker(false)}
+        brokerData={null}
+        onSaved={handleBrokerAdded}
+        onToast={(t, m) => toast[t](m)}
       />
     </div>
   );

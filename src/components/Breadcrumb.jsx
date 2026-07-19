@@ -17,6 +17,7 @@ const ROUTE_LABELS = {
   "/users":         { label: "المستخدمين",         icon: "👤" },
   "/system":        { label: "إدارة النظام",       icon: "⚙" },
   "/accounts":      { label: "الحسابات",           icon: "💳" },
+  "/accounts/drivers": { label: "حسابات السائقين", icon: "💳" },
   "/settings":      { label: "الإعدادات",          icon: "🛠" },
   "/new-trip":      { label: "نموذج رحلة جديدة",  icon: "📝" },
 };

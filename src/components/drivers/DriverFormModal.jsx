@@ -1,14 +1,16 @@
 import { useState, useEffect, useMemo } from "react";
 import AppModal from "../ui/AppModal";
 import {
-  sanitizePhoneInput,
-  validatePhoneTenDigits,
-  normalizeSaudiPhoneFromApi,
+  sanitizePhoneInputFiveStart,
+  validatePhoneTenDigitsFiveStart,
+  normalizeSaudiPhoneForInputFiveStart,
   validateEmail,
   sanitizeIbanInput,
   validateSaudiIban,
   SAUDI_IBAN_DIGITS,
 } from "../../lib/phoneValidation.js";
+import { fetchCities, NATIONALITY_OPTIONS } from "../../services/cityService.js";
+import { getDriverBankingData, saveDriverBankingData } from "../../lib/driverBanking.js";
 
 const BASE = "https://drivo1.elmoroj.com/api";
 const DRIVER_ID_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
@@ -76,7 +78,7 @@ const DRIVER_REQUIRED_FILES = [
 ];
 
 // Field helper — خارج المودال عشان ميتعملش re-mount كل render
-const FormField = ({ label, value, onChange, type = "text", placeholder = "", required, dir, invalid, hint, maxLength, inputMode }) => (
+const FormField = ({ label, value, onChange, type = "text", placeholder = "", required, dir, invalid, hint, maxLength, inputMode, disabled = false }) => (
   <div className="space-y-1.5">
     <label className="text-xs text-gray-500 block text-right">
       {label}{required ? " *" : ""}
@@ -90,7 +92,8 @@ const FormField = ({ label, value, onChange, type = "text", placeholder = "", re
       dir={dir}
       maxLength={maxLength}
       inputMode={inputMode}
-      className={`w-full border rounded-xl px-3 py-2.5 text-sm focus:outline-none bg-white text-right placeholder-gray-300 ${
+      disabled={disabled}
+      className={`w-full border rounded-xl px-3 py-2.5 text-sm focus:outline-none bg-white text-right placeholder-gray-300 disabled:bg-gray-50 disabled:text-gray-400 ${
         invalid ? "border-red-300 focus:border-red-400" : "border-gray-200 focus:border-[#c9a84c]"
       }`}
     />
@@ -111,8 +114,8 @@ const SaudiPhoneField = ({ value, onChange, invalid, hint }) => (
         type="tel"
         inputMode="numeric"
         value={value}
-        onChange={(e) => onChange(sanitizePhoneInput(e.target.value))}
-        placeholder="05xxxxxxxx"
+        onChange={(e) => onChange(sanitizePhoneInputFiveStart(e.target.value))}
+        placeholder="5xxxxxxxxx"
         maxLength={10}
         required
         className={`flex-1 rounded-xl border px-3 py-2.5 text-sm focus:outline-none bg-white text-left placeholder-gray-300 ${
@@ -161,10 +164,46 @@ const GenderSelect = ({ value, onChange }) => (
       required
       className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-[#c9a84c] bg-white text-right appearance-none"
     >
-      <option value="">اختر الجنس</option>
-      {GENDER_OPTIONS.map(option => (
-        <option key={option} value={option}>{option}</option>
+      <option value="" disabled hidden>
+        اختر الجنس
+      </option>
+      {GENDER_OPTIONS.map((option) => (
+        <option key={option} value={option}>
+          {option}
+        </option>
       ))}
+    </select>
+  </div>
+);
+
+const SelectField = ({ label, value, onChange, options, placeholder, required, loading, extraOption }) => (
+  <div className="space-y-1.5">
+    <label className="text-xs text-gray-500 block text-right">
+      {label}
+      {required ? " *" : ""}
+    </label>
+    <select
+      value={value}
+      onChange={onChange}
+      required={required}
+      disabled={loading}
+      className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-[#c9a84c] bg-white text-right appearance-none disabled:opacity-60"
+    >
+      <option value="" disabled hidden>
+        {placeholder}
+      </option>
+      {extraOption && !options.some((o) => o === extraOption || o?.name === extraOption) && (
+        <option value={extraOption}>{extraOption}</option>
+      )}
+      {options.map((opt) => {
+        const val = typeof opt === "string" ? opt : opt.name;
+        const key = typeof opt === "string" ? opt : opt.id ?? opt.name;
+        return (
+          <option key={key} value={val}>
+            {val}
+          </option>
+        );
+      })}
     </select>
   </div>
 );
@@ -188,32 +227,49 @@ export default function DriverFormModal({ isOpen, onClose, driverData, onSaved, 
   const [form, setForm] = useState({
     name:"", phone:"", address:"", nationality:"", gender:"", email:"",
     bank_name:"", account_owner:"", bank_account_number:"", iban:"",
+    banking_status:"مؤهل", balance:"0",
     car_type:"", car_model:"", vehicle_size:""
   });
   const [fileMap, setFileMap] = useState({});
   const [saving, setSaving] = useState(false);
   const [success, setSuccess] = useState(false);
+  const [cities, setCities] = useState([]);
+  const [citiesLoading, setCitiesLoading] = useState(false);
 
   useEffect(() => {
     if (!isOpen) return;
     setSuccess(false);
     setFileMap({});
     if (driverData) {
+      const banking = getDriverBankingData(driverData);
       setForm({
-        name: driverData.name||"", phone: normalizeSaudiPhoneFromApi(driverData.phone||""),
+        name: driverData.name||"", phone: normalizeSaudiPhoneForInputFiveStart(driverData.phone||""),
         address: driverData.address||"", nationality: driverData.nationality||"",
         gender: normalizeGender(driverData.gender), email: driverData.email||"",
         bank_name: driverData.bank_name || "",
         account_owner: driverData.account_owner || "",
         bank_account_number: driverData.bank_account_number || "",
         iban: ibanDigitsFromApi(driverData.iban),
+        banking_status: banking.bankingStatus,
+        balance: String(banking.balance),
         car_type: driverData.car_type||"", car_model: driverData.car_model||"",
         vehicle_size: driverData.vehicle_size||""
       });
     } else {
-      setForm({ name:"", phone:"", address:"", nationality:"", gender:"", email:"", bank_name:"", account_owner:"", bank_account_number:"", iban:"", car_type:"", car_model:"", vehicle_size:"" });
+      setForm({ name:"", phone:"", address:"", nationality:"", gender:"", email:"", bank_name:"", account_owner:"", bank_account_number:"", iban:"", banking_status:"مؤهل", balance:"0", car_type:"", car_model:"", vehicle_size:"" });
     }
   }, [isOpen, driverData?.id]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const ctrl = new AbortController();
+    setCitiesLoading(true);
+    fetchCities(ctrl.signal)
+      .then(setCities)
+      .catch(() => setCities([]))
+      .finally(() => setCitiesLoading(false));
+    return () => ctrl.abort();
+  }, [isOpen]);
 
   const u = (k) => (e) => setForm(f => ({...f, [k]: e.target.value}));
   const setPhone = (phone) => setForm((f) => ({ ...f, phone }));
@@ -221,21 +277,24 @@ export default function DriverFormModal({ isOpen, onClose, driverData, onSaved, 
   const onFileChange = (k, file) => setFileMap(f => ({...f, [k]: file}));
   const isGenderSelected = GENDER_OPTIONS.includes(form.gender);
 
-  const phoneValidation = useMemo(() => validatePhoneTenDigits(form.phone), [form.phone]);
+  const phoneValidation = useMemo(() => validatePhoneTenDigitsFiveStart(form.phone), [form.phone]);
   const emailValidation = useMemo(() => validateEmail(form.email), [form.email]);
   const ibanValidation = useMemo(() => validateSaudiIban(form.iban), [form.iban]);
 
   const phoneInvalid = form.phone.length > 0 && !phoneValidation.valid;
   const emailInvalid = form.email.trim().length > 0 && !emailValidation.valid;
   const ibanInvalid = form.iban.length > 0 && !ibanValidation.valid;
+  const bankingValid =
+    form.banking_status === "مؤهل" ||
+    (form.banking_status === "غير مؤهل" && Number(form.balance) > 0);
 
   const isCreateFormValid = useMemo(() => {
-    if (!isGenderSelected || !phoneValidation.valid || !emailValidation.valid) return false;
+    if (!isGenderSelected || !phoneValidation.valid || !emailValidation.valid || !bankingValid) return false;
     if (isEditing) return true;
     const textsOk = DRIVER_REQUIRED_FIELDS.every(([key]) => String(form[key] ?? "").trim());
     const filesOk = DRIVER_REQUIRED_FILES.every(([key]) => Boolean(fileMap[key]));
     return textsOk && filesOk && Boolean(form.vehicle_size) && ibanValidation.valid;
-  }, [isEditing, form, fileMap, isGenderSelected, phoneValidation.valid, emailValidation.valid, ibanValidation.valid]);
+  }, [isEditing, form, fileMap, isGenderSelected, phoneValidation.valid, emailValidation.valid, ibanValidation.valid, bankingValid]);
 
   const validateBeforeSubmit = () => {
     if (!isGenderSelected) {
@@ -248,6 +307,10 @@ export default function DriverFormModal({ isOpen, onClose, driverData, onSaved, 
     }
     if (!emailValidation.valid) {
       onToast?.("error", emailValidation.message || "البريد الإلكتروني غير صحيح");
+      return false;
+    }
+    if (!bankingValid) {
+      onToast?.("error", "يرجى إدخال رصيد المديونية");
       return false;
     }
     if (!isEditing && !ibanValidation.valid) {
@@ -281,8 +344,9 @@ export default function DriverFormModal({ isOpen, onClose, driverData, onSaved, 
     setSaving(true);
     try {
       let url;
+      const { banking_status: bankingStatus, balance, ...driverFields } = form;
       const apiForm = {
-        ...form,
+        ...driverFields,
         phone: phoneValidation.normalized ?? form.phone,
         email: emailValidation.normalized ?? form.email,
         iban: ibanValidation.normalized ?? form.iban,
@@ -297,6 +361,10 @@ export default function DriverFormModal({ isOpen, onClose, driverData, onSaved, 
         Object.entries(fileMap).forEach(([k,file]) => { if(file) fd.append(k, file); });
         const res = await fetch(url, { method: "POST", body: fd });
         if (res.ok || res.status < 500) {
+          saveDriverBankingData(driverData.id, {
+            bankingStatus,
+            balance: bankingStatus === "غير مؤهل" ? balance : 0,
+          });
           setSuccess(true);
           onSaved();
           onToast?.("success", "تم تعديل بيانات السائق بنجاح");
@@ -346,6 +414,10 @@ export default function DriverFormModal({ isOpen, onClose, driverData, onSaved, 
 
           const createdDriver = refreshedDrivers.find((driver) => String(driver.id) === driverId);
 
+          saveDriverBankingData(driverId, {
+            bankingStatus,
+            balance: bankingStatus === "غير مؤهل" ? balance : 0,
+          });
           setSuccess(true);
           onSaved(createdDriver ?? { id: driverId, name: form.name, phone: apiForm.phone });
           onToast?.("success", "تم إضافة السائق بنجاح");
@@ -388,13 +460,30 @@ export default function DriverFormModal({ isOpen, onClose, driverData, onSaved, 
                   phoneInvalid
                     ? phoneValidation.message
                     : form.phone
-                      ? "10 أرقام — مثال: 05xxxxxxxx"
-                      : "كود السعودية +966"
+                      ? "10 أرقام تبدأ بـ 5 — مثال: 5xxxxxxxxx"
+                      : "كود السعودية +966 — 10 أرقام تبدأ بـ 5"
                 }
               />
               <FormField label="اسم السائق" value={form.name} onChange={u("name")} placeholder="ادخل اسم السائق" required />
-              <FormField label="الجنسية" value={form.nationality} onChange={u("nationality")} placeholder="ادخل جنسية السائق" required />
-              <FormField label="المدينه" value={form.address} onChange={u("address")} placeholder="ادخل مدينة السائق" required />
+              <SelectField
+                label="الجنسية"
+                value={form.nationality}
+                onChange={u("nationality")}
+                options={NATIONALITY_OPTIONS}
+                placeholder="اختر الجنسية"
+                required
+                extraOption={form.nationality}
+              />
+              <SelectField
+                label="المدينه"
+                value={form.address}
+                onChange={u("address")}
+                options={cities}
+                placeholder={citiesLoading ? "جاري تحميل المدن..." : "اختر المدينة"}
+                required
+                loading={citiesLoading}
+                extraOption={form.address}
+              />
               <GenderSelect value={form.gender} onChange={u("gender")}/>
               <FormField
                 label="البريد الإلكتروني"
@@ -414,6 +503,35 @@ export default function DriverFormModal({ isOpen, onClose, driverData, onSaved, 
           {/* المعلومات المالية */}
           <div className="bg-white rounded-xl border border-gray-100 p-4 space-y-3 shadow-sm">
             <h4 className="text-sm font-bold text-[#c9a84c] text-right">$ المعلومات المالية</h4>
+            <div className="grid grid-cols-2 gap-3">
+              <SelectField
+                label="الحالة البنكية"
+                value={form.banking_status}
+                onChange={(e) => {
+                  const status = e.target.value;
+                  setForm((current) => ({
+                    ...current,
+                    banking_status: status,
+                    balance: status === "مؤهل" ? "0" : current.balance,
+                  }));
+                }}
+                options={["مؤهل", "غير مؤهل"]}
+                placeholder="اختر الحالة البنكية"
+                required
+              />
+              <FormField
+                label="الرصيد"
+                value={form.balance}
+                onChange={u("balance")}
+                type="number"
+                placeholder="0"
+                required={form.banking_status === "غير مؤهل"}
+                inputMode="decimal"
+                disabled={form.banking_status === "مؤهل"}
+                invalid={form.banking_status === "غير مؤهل" && Number(form.balance) <= 0}
+                hint={form.banking_status === "مؤهل" ? "الرصيد صفر للسائق المؤهل" : "أدخل قيمة المديونية"}
+              />
+            </div>
             <FormField label="اسم البنك" value={form.bank_name} onChange={u("bank_name")} placeholder="ادخل اسم البنك" required={!isEditing} />
             <FormField label="اسم صاحب الحساب" value={form.account_owner} onChange={u("account_owner")} placeholder="ادخل اسم صاحب الحساب" required={!isEditing} />
             <p className="text-[10px] text-gray-400 text-right">لابد ان يتطابق مع اسم السائق</p>
@@ -449,7 +567,7 @@ export default function DriverFormModal({ isOpen, onClose, driverData, onSaved, 
               <label className="text-xs text-gray-500 block text-right">حجم السيارة *</label>
               <select value={form.vehicle_size} onChange={u("vehicle_size")} required={!isEditing}
                 className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-[#c9a84c] bg-white text-right appearance-none">
-                <option value="">اختر حجم السيارة</option>
+                <option value="" disabled hidden>اختر حجم السيارة</option>
                 <option value="صغيرة">صغيرة (4 ركاب)</option>
                 <option value="متوسطه">متوسطة (5-6 ركاب)</option>
                 <option value="كبيرة">كبيرة (7+ ركاب)</option>

@@ -1,18 +1,39 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { useToast } from "../../lib/toast";
 import AppModal, { ModalField, ModalActions, modalInputClass } from "../ui/AppModal";
 import { createCustomer } from "../../services/customerService";
-import { sanitizePhoneInput, validatePhoneTenDigits } from "../../lib/phoneValidation";
+import {
+  sanitizePhoneInputFiveStart,
+  validatePhoneTenDigitsFiveStart,
+} from "../../lib/phoneValidation";
+import { fetchCities, NATIONALITY_OPTIONS } from "../../services/cityService.js";
 
-const EMPTY_FORM = { name: "", phone: "", address: "", gender: "ذكر", nationality: "سعودية" };
+const EMPTY_FORM = { name: "", phone: "", address: "", gender: "", nationality: "" };
 
 export default function AddClientModal({ isOpen, onClose, onSuccess }) {
   const toast = useToast();
   const [formData, setFormData] = useState(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
+  const [cities, setCities] = useState([]);
+  const [citiesLoading, setCitiesLoading] = useState(false);
 
-  const phoneValidation = useMemo(() => validatePhoneTenDigits(formData.phone), [formData.phone]);
+  const phoneValidation = useMemo(
+    () => validatePhoneTenDigitsFiveStart(formData.phone),
+    [formData.phone]
+  );
   const phoneInvalid = formData.phone.length > 0 && !phoneValidation.valid;
+
+  useEffect(() => {
+    if (!isOpen) return;
+    setFormData(EMPTY_FORM);
+    const ctrl = new AbortController();
+    setCitiesLoading(true);
+    fetchCities(ctrl.signal)
+      .then(setCities)
+      .catch(() => setCities([]))
+      .finally(() => setCitiesLoading(false));
+    return () => ctrl.abort();
+  }, [isOpen]);
 
   const handleClose = () => {
     if (saving) return;
@@ -27,7 +48,11 @@ export default function AddClientModal({ isOpen, onClose, onSuccess }) {
       return;
     }
     if (!phoneValidation.valid) {
-      toast.error(phoneValidation.message || "أدخل رقم هاتف صحيح (10 أرقام)");
+      toast.error(phoneValidation.message || "أدخل رقم هاتف صحيح (10 أرقام تبدأ بـ 5)");
+      return;
+    }
+    if (!formData.gender) {
+      toast.error("اختر الجنس");
       return;
     }
     setSaving(true);
@@ -74,8 +99,10 @@ export default function AddClientModal({ isOpen, onClose, onSuccess }) {
                 inputMode="numeric"
                 required
                 value={formData.phone}
-                onChange={(e) => setFormData({ ...formData, phone: sanitizePhoneInput(e.target.value) })}
-                placeholder="05xxxxxxxx"
+                onChange={(e) =>
+                  setFormData({ ...formData, phone: sanitizePhoneInputFiveStart(e.target.value) })
+                }
+                placeholder="5xxxxxxxxx"
                 maxLength={10}
                 className={`flex-1 rounded-xl border px-3 py-2.5 text-sm focus:outline-none bg-white text-left placeholder-gray-300 disabled:opacity-60 ${
                   phoneInvalid ? "border-red-300 focus:border-red-400" : "border-gray-200 focus:border-[#c9a84c]"
@@ -88,40 +115,65 @@ export default function AddClientModal({ isOpen, onClose, onSuccess }) {
               {phoneInvalid
                 ? phoneValidation.message
                 : formData.phone.length > 0
-                  ? "10 أرقام — مثال: 05xxxxxxxx"
-                  : "كود السعودية +966 — 10 أرقام"}
+                  ? "10 أرقام تبدأ بـ 5 — مثال: 5xxxxxxxxx"
+                  : "كود السعودية +966 — 10 أرقام تبدأ بـ 5"}
             </p>
           </div>
         </ModalField>
-        <ModalField label="العنوان">
-          <input
-            type="text"
+        <ModalField label="المدينة">
+          <select
             value={formData.address}
             onChange={(e) => setFormData({ ...formData, address: e.target.value })}
-            className={modalInputClass}
-            disabled={saving}
-          />
+            className={`${modalInputClass} appearance-none`}
+            disabled={saving || citiesLoading}
+          >
+            <option value="" disabled hidden>
+              {citiesLoading ? "جاري تحميل المدن..." : "اختر المدينة"}
+            </option>
+            {formData.address && !cities.some((c) => c.name === formData.address) && (
+              <option value={formData.address}>{formData.address}</option>
+            )}
+            {cities.map((c) => (
+              <option key={c.id} value={c.name}>
+                {c.name}
+              </option>
+            ))}
+          </select>
         </ModalField>
         <ModalField label="الجنسية">
-          <input
-            type="text"
+          <select
             value={formData.nationality}
             onChange={(e) => setFormData({ ...formData, nationality: e.target.value })}
-            className={modalInputClass}
+            className={`${modalInputClass} appearance-none`}
             disabled={saving}
-          />
+          >
+            <option value="" disabled hidden>
+              اختر الجنسية
+            </option>
+            {formData.nationality && !NATIONALITY_OPTIONS.includes(formData.nationality) && (
+              <option value={formData.nationality}>{formData.nationality}</option>
+            )}
+            {NATIONALITY_OPTIONS.map((n) => (
+              <option key={n} value={n}>
+                {n}
+              </option>
+            ))}
+          </select>
         </ModalField>
-        <ModalField label="النوع">
+        <ModalField label="الجنس" required>
           <select
             value={formData.gender}
             onChange={(e) => setFormData({ ...formData, gender: e.target.value })}
             className={`${modalInputClass} appearance-none`}
             disabled={saving}
+            required
           >
+            <option value="" disabled hidden>
+              اختر الجنس
+            </option>
             <option value="ذكر">ذكر</option>
             <option value="أنثى">أنثى</option>
             <option value="طفل">طفل</option>
-            <option value="غير">غير</option>
           </select>
         </ModalField>
         <ModalActions

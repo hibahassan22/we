@@ -16,7 +16,23 @@ import { exportToExcel } from "../lib/exportExcel.js";
 import { useAuth } from "../hooks/useAuth.js";
 import { getCurrentSale } from "../services/authService.js";
 import { createDriverViolation } from "../services/driverViolationsService.js";
+import { fetchBrokers } from "../services/brokerService.js";
+import { getDriverBankingData } from "../lib/driverBanking.js";
 const BASE = "https://drivo1.elmoroj.com/api";
+
+function phoneDigits(phone) {
+  return String(phone || "").replace(/\D/g, "").slice(-10);
+}
+
+function isDriverBroker(driver, brokerIds, brokerPhones) {
+  if (!driver) return false;
+  if (driver.is_broker === true || driver.isBroker === true || driver.is_broker === 1) return true;
+  if (String(driver.role || "").toLowerCase() === "broker") return true;
+  if (brokerIds?.has(String(driver.id))) return true;
+  const ph = phoneDigits(driver.phone);
+  if (ph && brokerPhones?.has(ph)) return true;
+  return false;
+}
 
 // ── Progress Bar ──────────────────────────────────────────────
 const ProgressBar = ({ value }) => (
@@ -440,16 +456,19 @@ const DriverDetailsPage = ({
 };
 
 // ── Main DriversPage ──────────────────────────────────────────
-const ITEMS_PER_PAGE = 6;
+const PAGE_SIZE_OPTIONS = [6, 10, 25, 50, 100, 200, 500, 1000];
 
 export default function DriversPage() {
   const [drivers, setDrivers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(PAGE_SIZE_OPTIONS[0]);
   const [selectedDriver, setSelectedDriver] = useState(null);
   const [modalState, setModalState] = useState({ type: null, driver: null });
   const [deleteLoading, setDeleteLoading] = useState(false);
+  const [brokerDriverIds, setBrokerDriverIds] = useState(() => new Set());
+  const [brokerPhones, setBrokerPhones] = useState(() => new Set());
   const closeGlobalModal = () => setModalState({ type: null, driver: null });
   const toast = useToast();
   const { statusLabel, statusColor, statuses } = useDriverStatuses();
@@ -461,16 +480,22 @@ export default function DriversPage() {
   const canDelete = can(PERMISSIONS.DRIVERS_DELETE);
 
   const filteredDrivers = useMemo(
-    () => filterByGlobalSearch(drivers, searchQuery, (d) => [
-      d.name,
-      d.last_name,
-      d.phone,
-      d.address,
-      d.car_type,
-      d.id,
-      statusLabel(d.status),
-    ]),
-    [drivers, searchQuery, statusLabel]
+    () => filterByGlobalSearch(drivers, searchQuery, (d) => {
+      const banking = getDriverBankingData(d);
+      return [
+        d.name,
+        d.last_name,
+        d.phone,
+        d.address,
+        d.car_type,
+        d.id,
+        statusLabel(d.status),
+        banking.balance,
+        banking.bankingStatus,
+        isDriverBroker(d, brokerDriverIds, brokerPhones) ? "وسيط" : "",
+      ];
+    }),
+    [drivers, searchQuery, statusLabel, brokerDriverIds, brokerPhones]
   );
 
   useEffect(() => {
@@ -491,6 +516,30 @@ export default function DriversPage() {
 
   useEffect(() => { fetchDrivers(); }, [fetchDrivers]);
 
+  useEffect(() => {
+    let cancelled = false;
+    fetchBrokers()
+      .then((list) => {
+        if (cancelled) return;
+        const ids = new Set();
+        const phones = new Set();
+        for (const b of list || []) {
+          if (b.driver_id != null && b.driver_id !== "") ids.add(String(b.driver_id));
+          const ph = phoneDigits(b.phone);
+          if (ph) phones.add(ph);
+        }
+        setBrokerDriverIds(ids);
+        setBrokerPhones(phones);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setBrokerDriverIds(new Set());
+          setBrokerPhones(new Set());
+        }
+      });
+    return () => { cancelled = true; };
+  }, []);
+
   const executeDelete = async () => {
     if (!modalState.driver) return;
     setDeleteLoading(true);
@@ -504,8 +553,8 @@ export default function DriversPage() {
     closeGlobalModal();
   };
 
-  const totalPages = Math.max(1, Math.ceil(filteredDrivers.length / ITEMS_PER_PAGE));
-  const paginated = filteredDrivers.slice((page-1)*ITEMS_PER_PAGE, page*ITEMS_PER_PAGE);
+  const totalPages = Math.max(1, Math.ceil(filteredDrivers.length / pageSize));
+  const paginated = filteredDrivers.slice((page-1)*pageSize, page*pageSize);
 
   const handleExport = () => {
     if (!filteredDrivers.length) {
@@ -513,16 +562,21 @@ export default function DriversPage() {
       return;
     }
     try {
-      const rows = filteredDrivers.map((d) => ({
-        "الاسم": [d.name, d.last_name].filter(Boolean).join(" ") || "—",
-        "رقم الهاتف": d.phone || "—",
-        "المدينة": d.address || "—",
-        "نوع السيارة": d.car_type || "—",
-        "حالة الحساب": statusLabel(d.status),
-        "عدد الرحلات": d.trips_count ?? 0,
-        "المستحقات (ر.س)": d.total_dues ?? 0,
-        "اكتمال الملف (%)": d.profile_completion ?? 0,
-      }));
+      const rows = filteredDrivers.map((d) => {
+        const banking = getDriverBankingData(d);
+        return {
+          "الاسم": [d.name, d.last_name].filter(Boolean).join(" ") || "—",
+          "رقم الهاتف": d.phone || "—",
+          "المدينة": d.address || "—",
+          "نوع السيارة": d.car_type || "—",
+          "وسيط": isDriverBroker(d, brokerDriverIds, brokerPhones) ? "وسيط" : "—",
+          "حالة الحساب": statusLabel(d.status),
+          "الرصيد (ر.س)": banking.balance,
+          "الحالة البنكية": banking.bankingStatus,
+          "عدد الرحلات": d.trips_count ?? 0,
+          "اكتمال الملف (%)": d.profile_completion ?? 0,
+        };
+      });
       exportToExcel(rows, "قائمة_السائقين", "السائقين");
       toast.success("تم تصدير البيانات بنجاح");
     } catch (err) {
@@ -568,14 +622,29 @@ export default function DriversPage() {
           <h1 className="text-xl font-bold text-[#c9a84c]">قائمة السائقين</h1>
           <p className="text-xs text-gray-400 mt-0.5">إدارة ومتابعة السائقين والمهام بلحظة</p>
         </div>
-        <button
-          type="button"
-          onClick={handleExport}
-          disabled={loading || !filteredDrivers.length}
-          className="shrink-0 px-4 py-2 bg-[#c9a84c] hover:bg-[#b8973d] rounded-xl text-sm font-bold text-white disabled:opacity-50 disabled:cursor-not-allowed"
-        >
-          تصدير
-        </button>
+        <div className="flex items-center gap-3 shrink-0">
+          <label className="flex items-center gap-2 text-xs font-medium text-gray-500">
+            <span>عرض</span>
+            <select
+              value={pageSize}
+              onChange={(e) => { setPageSize(Number(e.target.value)); setPage(1); }}
+              className="rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm font-bold text-gray-700 focus:border-[#c9a84c] focus:outline-none"
+            >
+              {PAGE_SIZE_OPTIONS.map((size) => (
+                <option key={size} value={size}>{size}</option>
+              ))}
+            </select>
+            <span>سائق</span>
+          </label>
+          <button
+            type="button"
+            onClick={handleExport}
+            disabled={loading || !filteredDrivers.length}
+            className="px-4 py-2 bg-[#c9a84c] hover:bg-[#b8973d] rounded-xl text-sm font-bold text-white disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            تصدير
+          </button>
+        </div>
       </div>
 
       {/* Banner */}
@@ -604,21 +673,37 @@ export default function DriversPage() {
             <table className="w-full text-sm text-right">
               <thead>
                 <tr className="bg-[#f9f6f0] border-b border-gray-100">
-                  {["الاسم","رقم الهاتف","المدينة","نوع السيارة","حالة الحساب","عدد الرحلات","المستحقات","اكتمال الملف","إجراءات"].map(h=>(
+                  {["الاسم","رقم الهاتف","المدينة","نوع السيارة","وسيط","حالة الحساب","الرصيد","الحالة البنكية","عدد الرحلات","اكتمال الملف","إجراءات"].map(h=>(
                     <th key={h} className="px-4 py-3.5 text-xs font-semibold text-gray-500 whitespace-nowrap">{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
-                {paginated.map(driver=>(
+                {paginated.map(driver=>{
+                  const banking = getDriverBankingData(driver);
+                  return (
                   <tr key={driver.id} className="border-b border-gray-50 hover:bg-gray-50/60 transition-colors">
                     <td className="px-4 py-3.5 font-medium text-gray-800">{[driver.name, driver.last_name].filter(Boolean).join(" ")}</td>
                     <td className="px-4 py-3.5 text-gray-600" dir="ltr">{driver.phone}</td>
                     <td className="px-4 py-3.5 text-gray-600">{driver.address||"—"}</td>
                     <td className="px-4 py-3.5 text-gray-600">{driver.car_type||"—"}</td>
+                    <td className="px-4 py-3.5">
+                      {isDriverBroker(driver, brokerDriverIds, brokerPhones) ? (
+                        <span className="text-xs px-2.5 py-1 rounded-lg font-medium bg-amber-50 text-[#b88121]">وسيط</span>
+                      ) : (
+                        <span className="text-gray-400">—</span>
+                      )}
+                    </td>
                     <td className="px-4 py-3.5"><span className={`text-xs px-2.5 py-1 rounded-lg font-medium ${statusColor(driver.status)}`}>{statusLabel(driver.status)}</span></td>
+                    <td className={`px-4 py-3.5 font-semibold whitespace-nowrap ${banking.isDebtor ? "text-red-600" : "text-green-600"}`}>
+                      {banking.balance.toLocaleString("ar-SA")} ر.س
+                    </td>
+                    <td className="px-4 py-3.5">
+                      <span className={`text-xs px-2.5 py-1 rounded-lg font-semibold ${banking.isDebtor ? "bg-red-50 text-red-600" : "bg-green-50 text-green-600"}`}>
+                        {banking.bankingStatus}
+                      </span>
+                    </td>
                     <td className="px-4 py-3.5 text-gray-700 font-medium">{driver.trips_count||0}</td>
-                    <td className="px-4 py-3.5 text-gray-700 whitespace-nowrap">{driver.total_dues||0} ر.س</td>
                     <td className="px-4 py-3.5"><ProgressBar value={driver.profile_completion||0}/></td>
                     <td className="px-4 py-3.5">
                       <ActionIcons
@@ -631,9 +716,17 @@ export default function DriversPage() {
                       />
                     </td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
+          </div>
+        )}
+
+        {/* Results count */}
+        {!loading && !error && filteredDrivers.length > 0 && (
+          <div className="px-4 pt-3 text-center text-xs text-gray-500">
+            عرض {paginated.length} من إجمالي {filteredDrivers.length} سائق
           </div>
         )}
 

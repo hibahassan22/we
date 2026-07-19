@@ -41,6 +41,18 @@ export async function fetchTripChatMessages(tripId, signal) {
   return Array.isArray(json?.messages) ? json.messages : [];
 }
 
+/** GET /api/trip-without-drivers/{tripId}/payment-status → { payment_status: boolean } */
+export async function fetchTripPaymentStatus(tripId, signal) {
+  if (!tripId) return false;
+  const res = await fetch(`${API_BASE}/trip-without-drivers/${tripId}/payment-status`, {
+    headers: { Accept: "application/json" },
+    signal,
+  });
+  const json = await parseJsonResponse(res);
+  const raw = json?.payment_status ?? json?.paymentStatus ?? json?.data?.payment_status;
+  return raw === true || raw === 1 || raw === "1" || raw === "true" || raw === "paid";
+}
+
 /** POST /api/trip-chat/send */
 export async function sendTripChatMessage({ tripId, senderId, receiverId, message }) {
   const res = await fetch(`${API_BASE}/trip-chat/send`, {

@@ -40,14 +40,17 @@ export async function createTripRefundRequest(payload) {
 }
 
 /** PUT /trip-refund/handle/{tripId} */
-export async function handleTripRefund(tripId, { confirmedRefundAmount, status }) {
+export async function handleTripRefund(tripId, { confirmedRefundAmount, status, refundMethod }) {
+  const body = {
+    confirmed_refund_amount: Number(confirmedRefundAmount),
+    status,
+  };
+  if (refundMethod) body.refund_method = refundMethod;
+
   const res = await fetch(`${BASE}/trip-refund/handle/${tripId}`, {
     method: "PUT",
     headers: { Accept: "application/json", "Content-Type": "application/json" },
-    body: JSON.stringify({
-      confirmed_refund_amount: Number(confirmedRefundAmount),
-      status,
-    }),
+    body: JSON.stringify(body),
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));

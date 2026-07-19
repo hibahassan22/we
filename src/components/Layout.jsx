@@ -14,6 +14,9 @@ import {
   getDriverChatUserId,
   indexChatsByPartner,
   mergeDriversWithChatPreviews,
+  messageAttachments,
+  parseLocationMessage,
+  isMessageRead,
 } from "../services/driverSaleChatService.js";
 import { formatChatTime, driverDisplayName } from "../services/tripChatService.js";
 import { useToast } from "../lib/toast.jsx";
@@ -31,10 +34,10 @@ const LogoutIcon = () => (<svg className="w-4 h-4" fill="none" stroke="currentCo
 
 const ALL_NAV = [
   { label:"لوحة التحكم",     route:"/dashboard",    icon: <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"/></svg> },
+  { label:"السائقين",        route:"/drivers",       icon: <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/></svg> },
   { label:"سجل الرحلات",     route:"/trips",         icon: <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01"/></svg> },
   { label:"إنشاء رحلة",      route:"/create-trip",   icon: <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M12 9v3m0 0v3m0-3h3m-3 0H9m12 0a9 9 0 11-18 0 9 9 0 0118 0z"/></svg> },
   { label:"العملاء",          route:"/clients",       icon: <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg> },
-  { label:"السائقين",         route:"/drivers",       icon: <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z"/></svg> },
   { label:"إدارة الوسطاء",    route:"/brokers",       icon: <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"/></svg> },
   { label:"ادارة المكافآت",  route:"/rewards",       icon: <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M12 8v13m0-13V6a2 2 0 112 2h-2zm0 0V5.5A2.5 2.5 0 109.5 8H12zm-7 4h14M5 12a2 2 0 110-4h14a2 2 0 110 4M5 12v7a2 2 0 002 2h10a2 2 0 002-2v-7"/></svg> },
   { label:"الدعم الفني",     route:"/support",       icon: <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M18.364 5.636l-3.536 3.536m0 5.656l3.536 3.536M9.172 9.172L5.636 5.636m3.536 9.192l-3.536 3.536M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-5 0a4 4 0 11-8 0 4 4 0 018 0z"/></svg> },
@@ -44,9 +47,26 @@ const ALL_NAV = [
   { label:"الصلاحيات",       route:"/permissions",   icon: <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z"/></svg> },
   { label:"المستخدمين",      route:"/users",         icon: <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/></svg> },
   { label:"إدارة النظام",    route:"/system",        icon: <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg> },
-  { label:"الحسابات",        route:"/accounts",      icon: <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" /></svg> },
   { label:"الاعدادات",       route:"/settings",      icon: <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg> },
 ];
+
+const ACCOUNTS_NAV = {
+  label: "الحسابات",
+  icon: <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" /></svg>,
+  children: [
+    { label: "حسابات السائقين", route: "/accounts/drivers" },
+    { label: "الدفعات", route: "/accounts/payments" },
+    { label: "الموظفين", route: "/accounts/employees" },
+    { label: "الاستردادات", route: "/accounts/refunds" },
+    { label: "المصروفات", route: "/accounts/expenses" },
+  ],
+};
+
+function isAccountsChildRoute(pathname) {
+  return ACCOUNTS_NAV.children.some(
+    (child) => pathname === child.route || pathname.startsWith(`${child.route}/`),
+  );
+}
 
 function NotificationsDropdown({ onClose }) {
   const [items, setItems] = useState([]);
@@ -133,8 +153,11 @@ function ChatModal({ isOpen, onClose, currentUser }) {
   const [loading, setLoading] = useState(true);
   const [messagesLoading, setMessagesLoading] = useState(false);
   const [sending, setSending] = useState(false);
+  const [sendingLocation, setSendingLocation] = useState(false);
+  const [attachments, setAttachments] = useState([]);
   const [search, setSearch] = useState("");
   const bottomRef = useRef(null);
+  const fileInputRef = useRef(null);
 
   const dName = (d) => driverDisplayName(d, d?.chatUserId);
   const dInit = (d) => (d?.name?.[0] ?? "س").toUpperCase();
@@ -216,33 +239,61 @@ function ChatModal({ isOpen, onClose, currentUser }) {
     };
   }, [isOpen, onClose]);
 
-  const send = async () => {
-    const text = inputText.trim();
-    if (!text || !selected || !myId) {
+  const handlePickFiles = (e) => {
+    const files = Array.from(e.target.files || []).filter((f) => f.type.startsWith("image/"));
+    if (files.length) setAttachments((prev) => [...prev, ...files]);
+    e.target.value = "";
+  };
+
+  const removeAttachment = (index) => {
+    setAttachments((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  const sendMessagePayload = async ({ text = "", files = [], previewLabel }) => {
+    if (!selected || !myId) {
       if (!myId) toast.error("يجب تسجيل الدخول لإرسال رسالة");
-      return;
+      return false;
     }
     const receiverId = selected.chatUserId || getDriverChatUserId(selected);
     if (!receiverId) {
       toast.error("تعذر تحديد السائق");
+      return false;
+    }
+    await sendDriverSaleChatMessage({
+      senderId: myId,
+      receiverId,
+      message: text,
+      attachments: files,
+    });
+    const now = new Date();
+    const timeLabel = now.toLocaleTimeString("ar-EG", { hour: "2-digit", minute: "2-digit" });
+    const preview = previewLabel ?? text ?? (files.length ? "📷 صورة" : "");
+    setDrivers((prev) => prev.map((d) => (
+      d.chatUserId === selected.chatUserId
+        ? { ...d, lastMessage: preview, lastMessageTime: timeLabel, lastMessageAt: now.getTime() }
+        : d
+    )));
+    await loadMessages(selected);
+    return true;
+  };
+
+  const send = async () => {
+    const text = inputText.trim();
+    if ((!text && attachments.length === 0) || !selected || !myId) {
+      if (!myId) toast.error("يجب تسجيل الدخول لإرسال رسالة");
       return;
     }
     setSending(true);
     try {
-      await sendDriverSaleChatMessage({
-        senderId: myId,
-        receiverId,
-        message: text,
+      const ok = await sendMessagePayload({
+        text,
+        files: attachments,
+        previewLabel: attachments.length ? (text || "📷 صورة") : text,
       });
-      setInputText("");
-      const now = new Date();
-      const timeLabel = now.toLocaleTimeString("ar-EG", { hour: "2-digit", minute: "2-digit" });
-      setDrivers((prev) => prev.map((d) => (
-        d.chatUserId === selected.chatUserId
-          ? { ...d, lastMessage: text, lastMessageTime: timeLabel, lastMessageAt: now.getTime() }
-          : d
-      )));
-      await loadMessages(selected);
+      if (ok) {
+        setInputText("");
+        setAttachments([]);
+      }
     } catch (err) {
       toast.error(err.message || "فشل إرسال الرسالة");
     } finally {
@@ -250,10 +301,42 @@ function ChatModal({ isOpen, onClose, currentUser }) {
     }
   };
 
+  const sendLocation = () => {
+    if (!selected || !myId) {
+      if (!myId) toast.error("يجب تسجيل الدخول لإرسال رسالة");
+      return;
+    }
+    if (!navigator.geolocation) {
+      toast.error("خدمة الموقع غير مدعومة في المتصفح");
+      return;
+    }
+    setSendingLocation(true);
+    navigator.geolocation.getCurrentPosition(
+      async (pos) => {
+        try {
+          const { latitude, longitude } = pos.coords;
+          const url = `https://www.google.com/maps?q=${latitude},${longitude}`;
+          await sendMessagePayload({ text: `📍 الموقع: ${url}`, previewLabel: "📍 موقع" });
+        } catch (err) {
+          toast.error(err.message || "فشل إرسال الموقع");
+        } finally {
+          setSendingLocation(false);
+        }
+      },
+      (err) => {
+        setSendingLocation(false);
+        toast.error(err.code === err.PERMISSION_DENIED ? "تم رفض إذن الوصول للموقع" : "تعذر تحديد الموقع");
+      },
+      { enableHighAccuracy: true, timeout: 10000 },
+    );
+  };
+
   const selectDriver = (driver) => {
     markChatDriverRead(driver.chatUserId);
     if (driver.chatUserId === selected?.chatUserId) return;
     setSelected(driver);
+    setInputText("");
+    setAttachments([]);
   };
 
   const filtered = useMemo(() => {
@@ -396,6 +479,9 @@ function ChatModal({ isOpen, onClose, currentUser }) {
                   ) : (
                     messages.map((m) => {
                       const isMe = String(m.sender_id) === String(myId);
+                      const files = messageAttachments(m);
+                      const location = parseLocationMessage(m.message);
+                      const read = isMessageRead(m);
                       return (
                         <div key={m.id} className={`flex flex-col gap-1 max-w-[78%] ${isMe ? "mr-auto items-end" : "ml-auto items-start"}`}>
                           <div className={`px-4 py-2.5 rounded-2xl text-sm leading-relaxed shadow-sm ${
@@ -403,9 +489,51 @@ function ChatModal({ isOpen, onClose, currentUser }) {
                               ? "bg-gradient-to-br from-[#9C6402] to-[#c9a84c] text-white rounded-bl-md"
                               : "bg-white text-gray-800 border border-gray-100 rounded-br-md"
                           }`}>
-                            {m.message}
+                            {location ? (
+                              <a
+                                href={location.url}
+                                target="_blank"
+                                rel="noreferrer"
+                                className={`flex items-center gap-2 font-semibold ${isMe ? "text-white" : "text-[#c9a84c]"}`}
+                              >
+                                <svg className="w-5 h-5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a2 2 0 01-2.828 0l-4.243-4.243a8 8 0 1111.314 0z" />
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
+                                </svg>
+                                عرض الموقع على الخريطة
+                              </a>
+                            ) : (
+                              m.message && <p className="whitespace-pre-wrap break-words">{m.message}</p>
+                            )}
+                            {files.length > 0 && (
+                              <div className={`grid gap-1.5 ${files.length > 1 ? "grid-cols-2" : "grid-cols-1"} ${m.message && !location ? "mt-2" : ""}`}>
+                                {files.map((url, idx) => (
+                                  <a key={idx} href={url} target="_blank" rel="noreferrer" className="block">
+                                    <img
+                                      src={url}
+                                      alt="مرفق"
+                                      loading="lazy"
+                                      className="w-full max-h-44 object-cover rounded-lg border border-black/10"
+                                    />
+                                  </a>
+                                ))}
+                              </div>
+                            )}
                           </div>
-                          <span className="text-[10px] text-gray-400 px-1">{formatChatTime(m.created_at)}</span>
+                          <div className="flex items-center gap-1 px-1">
+                            <span className="text-[10px] text-gray-400">{formatChatTime(m.created_at)}</span>
+                            {isMe && (
+                              read ? (
+                                <svg className="w-4 h-4 text-sky-500" viewBox="0 0 18 14" fill="currentColor" title="تم القراءة">
+                                  <path d="M6.5 10.6 2.9 7l-1 1 4.6 4.6L16.1 3 15.1 2zM12.9 3 11.9 2 7.6 6.3l1 1z" />
+                                </svg>
+                              ) : (
+                                <svg className="w-4 h-4 text-gray-400" viewBox="0 0 18 14" fill="currentColor" title="تم الإرسال">
+                                  <path d="M6.5 10.6 2.9 7l-1 1 4.6 4.6L16.1 3 15.1 2z" />
+                                </svg>
+                              )
+                            )}
+                          </div>
                         </div>
                       );
                     })
@@ -414,7 +542,58 @@ function ChatModal({ isOpen, onClose, currentUser }) {
                 </div>
 
                 <footer className="px-5 py-4 bg-white border-t border-gray-100">
-                  <div className="flex items-center gap-3 bg-gray-50 rounded-2xl px-4 py-3 border border-gray-200 focus-within:border-[#c9a84c]/40 focus-within:ring-2 focus-within:ring-[#c9a84c]/10 transition-all">
+                  {attachments.length > 0 && (
+                    <div className="flex flex-wrap gap-2 mb-3">
+                      {attachments.map((file, idx) => (
+                        <div key={idx} className="relative w-16 h-16 rounded-lg overflow-hidden border border-gray-200">
+                          <img src={URL.createObjectURL(file)} alt="مرفق" className="w-full h-full object-cover" />
+                          <button
+                            type="button"
+                            onClick={() => removeAttachment(idx)}
+                            className="absolute top-0.5 right-0.5 w-5 h-5 rounded-full bg-black/60 text-white text-xs flex items-center justify-center hover:bg-black"
+                          >
+                            ×
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  <div className="flex items-center gap-2 bg-gray-50 rounded-2xl px-3 py-2 border border-gray-200 focus-within:border-[#c9a84c]/40 focus-within:ring-2 focus-within:ring-[#c9a84c]/10 transition-all">
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      accept="image/*"
+                      multiple
+                      onChange={handlePickFiles}
+                      className="hidden"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => fileInputRef.current?.click()}
+                      disabled={sending}
+                      title="إرفاق صور"
+                      className="w-9 h-9 rounded-xl text-gray-500 hover:text-[#c9a84c] hover:bg-white flex items-center justify-center shrink-0 transition-colors disabled:opacity-40"
+                    >
+                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
+                      </svg>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={sendLocation}
+                      disabled={sending || sendingLocation}
+                      title="إرسال الموقع الحالي"
+                      className="w-9 h-9 rounded-xl text-gray-500 hover:text-[#c9a84c] hover:bg-white flex items-center justify-center shrink-0 transition-colors disabled:opacity-40"
+                    >
+                      {sendingLocation ? (
+                        <div className="w-4 h-4 border-2 border-[#c9a84c] border-t-transparent rounded-full animate-spin" />
+                      ) : (
+                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a2 2 0 01-2.828 0l-4.243-4.243a8 8 0 1111.314 0z" />
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
+                        </svg>
+                      )}
+                    </button>
                     <input
                       value={inputText}
                       onChange={(e) => setInputText(e.target.value)}
@@ -427,7 +606,7 @@ function ChatModal({ isOpen, onClose, currentUser }) {
                     <button
                       type="button"
                       onClick={send}
-                      disabled={sending || !inputText.trim()}
+                      disabled={sending || (!inputText.trim() && attachments.length === 0)}
                       className="w-10 h-10 rounded-xl bg-gradient-to-br from-[#9C6402] to-[#E6C76A] flex items-center justify-center text-white shrink-0 hover:opacity-90 transition-opacity disabled:opacity-40 shadow-sm"
                     >
                       {sending ? (
@@ -464,6 +643,7 @@ export default function Layout({ children }) {
   const { user, signOut, roleLabel } = useAuthContext();
   const [chatOpen,  setChatOpen]  = useState(false);
   const [bellOpen,  setBellOpen]  = useState(false);
+  const [accountsOpen, setAccountsOpen] = useState(() => isAccountsChildRoute(location.pathname));
   const unreadCount = useUnreadCount();
   const chatUnreadCount = useChatUnreadCount();
   const { searchQuery, setSearchQuery } = useGlobalSearch();
@@ -475,6 +655,12 @@ export default function Layout({ children }) {
     return () => clearInterval(poll);
   }, []);
 
+  useEffect(() => {
+    if (isAccountsChildRoute(location.pathname)) {
+      setAccountsOpen(true);
+    }
+  }, [location.pathname]);
+
   const { isAdmin, canRoute } = usePermissions();
   const firstName = user?.firstName ?? user?.fullName?.split(" ")[0] ?? "";
   const lastName  = user?.lastName  ?? "";
@@ -482,6 +668,8 @@ export default function Layout({ children }) {
   const avatar    = user?.imageUrl;
 
   const navItems = ALL_NAV.filter((item) => isAdmin || canRoute(item.route));
+  const accountsChildren = ACCOUNTS_NAV.children.filter((item) => isAdmin || canRoute(item.route));
+  const showAccountsNav = accountsChildren.length > 0;
 
   const renderNavButton = (item) => {
     const active =
@@ -511,6 +699,68 @@ export default function Layout({ children }) {
     );
   };
 
+  const renderAccountsNav = () => {
+    const groupActive = isAccountsChildRoute(location.pathname);
+
+    return (
+      <div className="space-y-0.5">
+        <button
+          type="button"
+          onClick={() => setAccountsOpen((open) => !open)}
+          className={
+            "w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all duration-200 text-right group " +
+            (groupActive
+              ? "text-white shadow-sm scale-[1.01]"
+              : "text-gray-400 hover:text-white hover:scale-[1.01]")
+          }
+          style={groupActive ? { background: "linear-gradient(90deg,#9C6402,#E6C76A)" } : undefined}
+          onMouseEnter={(e) => { if (!groupActive) e.currentTarget.style.background = "linear-gradient(90deg,#9C6402,#E6C76A)"; }}
+          onMouseLeave={(e) => { if (!groupActive) e.currentTarget.style.background = ""; }}
+        >
+          <span className={"shrink-0 transition-transform group-hover:scale-110 " + (groupActive ? "text-white" : "text-gray-500 group-hover:text-white")}>
+            {ACCOUNTS_NAV.icon}
+          </span>
+          <span className="truncate flex-1">{ACCOUNTS_NAV.label}</span>
+          <svg
+            className={`w-3.5 h-3.5 shrink-0 transition-transform ${accountsOpen ? "rotate-180" : ""} ${groupActive ? "text-white" : "text-gray-500 group-hover:text-white"}`}
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+          </svg>
+        </button>
+
+        {accountsOpen && (
+          <div className="mr-3 pr-2 border-r border-[#c9a84c]/20 space-y-0.5">
+            {accountsChildren.map((child) => {
+              const active =
+                location.pathname === child.route ||
+                location.pathname.startsWith(`${child.route}/`);
+
+              return (
+                <button
+                  key={child.route}
+                  type="button"
+                  onClick={() => navigate(child.route)}
+                  className={
+                    "w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium transition-all duration-200 text-right " +
+                    (active
+                      ? "bg-[#c9a84c]/20 text-[#f5d98b] border border-[#c9a84c]/25"
+                      : "text-gray-500 hover:text-white hover:bg-white/5")
+                  }
+                >
+                  <span className="truncate flex-1">{child.label}</span>
+                  {active && <span className="w-1.5 h-1.5 bg-[#c9a84c] rounded-full shrink-0" />}
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    );
+  };
+
   return (
     <div
       className="flex h-screen font-sans overflow-hidden"
@@ -537,7 +787,21 @@ export default function Layout({ children }) {
 
         {/* Nav — scrollable */}
         <nav className="flex-1 overflow-y-auto px-3 space-y-0.5 min-h-0 scrollbar-hide" style={{scrollbarWidth:"none"}}>
-          {navItems.map((item) => renderNavButton(item))}
+          {(() => {
+            const settingsIndex = navItems.findIndex((item) => item.route === "/settings");
+            const beforeSettings = settingsIndex >= 0 ? navItems.slice(0, settingsIndex) : navItems;
+            const settingsAndAfter = settingsIndex >= 0 ? navItems.slice(settingsIndex) : [];
+            const [firstNavItem, ...restBeforeSettings] = beforeSettings;
+
+            return (
+              <>
+                {firstNavItem && renderNavButton(firstNavItem)}
+                {showAccountsNav && renderAccountsNav()}
+                {restBeforeSettings.map((item) => renderNavButton(item))}
+                {settingsAndAfter.map((item) => renderNavButton(item))}
+              </>
+            );
+          })()}
         </nav>
 
         {/* User card — always pinned to bottom */}

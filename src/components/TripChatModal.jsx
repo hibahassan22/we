@@ -1,8 +1,9 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
-import { Send } from "lucide-react";
+import { Send, Paperclip, MapPin } from "lucide-react";
 import { useToast } from "../lib/toast";
 import { useAuth } from "../hooks/useAuth";
 import AppModal from "./ui/AppModal";
+import { messageAttachments, parseLocationMessage, isMessageRead } from "../services/driverSaleChatService.js";
 
 const API_BASE = "https://drivo1.elmoroj.com/api";
 
@@ -27,17 +28,60 @@ async function fetchTripMessages(tripId) {
   return Array.isArray(data.messages) ? data.messages : [];
 }
 
-async function sendTripMessage({ tripId, senderId, receiverId, message }) {
-  const res = await fetch(`${API_BASE}/trip-chat/send`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Accept: "application/json" },
-    body: JSON.stringify({
-      trip_id: Number(tripId),
-      sender_id: senderId,
-      receiver_id: receiverId,
-      message: message.trim(),
-    }),
-  });
+// يبقى false لو رجّع السيرفر 405/404 مرة واحدة، فلا نكرر الطلب طوال الجلسة
+let tripPaymentStatusSupported = true;
+
+async function fetchTripPaymentPaid(tripId) {
+  if (!tripId || !tripPaymentStatusSupported) return { paid: false, supported: tripPaymentStatusSupported };
+  try {
+    const res = await fetch(`${API_BASE}/trip-without-drivers/${tripId}/payment-status`, {
+      headers: { Accept: "application/json" },
+    });
+    // الميثود/المسار غير متاح — أوقف المحاولة لتفادي تكرار الأخطاء
+    if (res.status === 405 || res.status === 404) {
+      tripPaymentStatusSupported = false;
+      return { paid: false, supported: false };
+    }
+    if (!res.ok) return { paid: false, supported: true };
+    const data = await res.json().catch(() => ({}));
+    const raw = data?.payment_status ?? data?.paymentStatus ?? data?.data?.payment_status;
+    return {
+      paid: raw === true || raw === 1 || raw === "1" || raw === "true" || raw === "paid",
+      supported: true,
+    };
+  } catch {
+    return { paid: false, supported: true };
+  }
+}
+
+async function sendTripMessage({ tripId, senderId, receiverId, message, attachments = [] }) {
+  const files = Array.isArray(attachments) ? attachments.filter(Boolean) : [];
+  const text = String(message ?? "").trim();
+  let res;
+  if (files.length > 0) {
+    const fd = new FormData();
+    fd.append("trip_id", Number(tripId));
+    fd.append("sender_id", senderId);
+    fd.append("receiver_id", receiverId);
+    fd.append("message", text);
+    files.forEach((file) => fd.append("attachments[]", file));
+    res = await fetch(`${API_BASE}/trip-chat/send`, {
+      method: "POST",
+      headers: { Accept: "application/json" },
+      body: fd,
+    });
+  } else {
+    res = await fetch(`${API_BASE}/trip-chat/send`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({
+        trip_id: Number(tripId),
+        sender_id: senderId,
+        receiver_id: receiverId,
+        message: text,
+      }),
+    });
+  }
   const json = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(json?.message || `خطأ ${res.status}`);
   return json;
@@ -63,6 +107,11 @@ export default function TripChatModal({ isOpen, onClose, tripId, tripLabel }) {
   const [inputText, setInputText] = useState("");
   const [loading, setLoading] = useState(false);
   const [sending, setSending] = useState(false);
+  const [sendingLocation, setSendingLocation] = useState(false);
+  const [attachments, setAttachments] = useState([]);
+  const [paymentPaid, setPaymentPaid] = useState(false);
+  const paymentSupportedRef = useRef(true);
+  const fileInputRef = useRef(null);
 
   const myId = user?.uid ?? "";
 
@@ -78,15 +127,18 @@ export default function TripChatModal({ isOpen, onClose, tripId, tripLabel }) {
     if (!tripId) return;
     setLoading(true);
     try {
-      const [msgs, driversRes] = await Promise.all([
+      const [msgs, driversRes, payment] = await Promise.all([
         fetchTripMessages(tripId),
         fetch(`${API_BASE}/drivers`, { headers: { Accept: "application/json" } }).then((r) => r.json()),
+        fetchTripPaymentPaid(tripId),
       ]);
 
       const driverList = Array.isArray(driversRes) ? driversRes : driversRes.data ?? driversRes.drivers ?? [];
 
       setMessages(msgs);
       setDrivers(driverList);
+      paymentSupportedRef.current = payment.supported;
+      setPaymentPaid(payment.paid);
 
       const driverIds = new Set(driverList.map((d) => String(d.id)));
       const involvedDriverIds = new Set();
@@ -119,6 +171,14 @@ export default function TripChatModal({ isOpen, onClose, tripId, tripLabel }) {
       fetchTripMessages(tripId)
         .then(setMessages)
         .catch(() => {});
+      if (paymentSupportedRef.current) {
+        fetchTripPaymentPaid(tripId)
+          .then((payment) => {
+            paymentSupportedRef.current = payment.supported;
+            setPaymentPaid(payment.paid);
+          })
+          .catch(() => {});
+      }
     }, 8000);
     return () => clearInterval(timer);
   }, [isOpen, tripId]);
@@ -159,27 +219,83 @@ export default function TripChatModal({ isOpen, onClose, tripId, tripLabel }) {
       .sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
   }, [messages, selectedDriverId]);
 
+  const handlePickFiles = (e) => {
+    const files = Array.from(e.target.files || []).filter((f) => f.type.startsWith("image/"));
+    if (files.length) setAttachments((prev) => [...prev, ...files]);
+    e.target.value = "";
+  };
+
+  const removeAttachment = (index) => {
+    setAttachments((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  const deliverMessage = async ({ text = "", files = [] }) => {
+    await sendTripMessage({
+      tripId,
+      senderId: myId,
+      receiverId: selectedDriverId,
+      message: text,
+      attachments: files,
+    });
+    const msgs = await fetchTripMessages(tripId);
+    setMessages(msgs);
+  };
+
   const handleSend = async () => {
-    if (!inputText.trim() || !selectedDriverId || !myId) {
+    if (paymentPaid) {
+      toast.error("تم إغلاق المحادثة لأنه تم الحجز ودفع الرحلة");
+      return;
+    }
+    if ((!inputText.trim() && attachments.length === 0) || !selectedDriverId || !myId) {
       if (!myId) toast.error("يجب تسجيل الدخول لإرسال رسالة");
       return;
     }
     setSending(true);
     try {
-      await sendTripMessage({
-        tripId,
-        senderId: myId,
-        receiverId: selectedDriverId,
-        message: inputText,
-      });
+      await deliverMessage({ text: inputText, files: attachments });
       setInputText("");
-      const msgs = await fetchTripMessages(tripId);
-      setMessages(msgs);
+      setAttachments([]);
     } catch (err) {
-      toast.error(err.message || "فشل إرسال الرسالة");
+      const msg = err.message || "فشل إرسال الرسالة";
+      if (/إغلاق|مدفوع|payment/i.test(msg)) setPaymentPaid(true);
+      toast.error(msg);
     } finally {
       setSending(false);
     }
+  };
+
+  const handleSendLocation = () => {
+    if (paymentPaid) {
+      toast.error("تم إغلاق المحادثة لأنه تم الحجز ودفع الرحلة");
+      return;
+    }
+    if (!selectedDriverId || !myId) {
+      if (!myId) toast.error("يجب تسجيل الدخول لإرسال رسالة");
+      return;
+    }
+    if (!navigator.geolocation) {
+      toast.error("خدمة الموقع غير مدعومة في المتصفح");
+      return;
+    }
+    setSendingLocation(true);
+    navigator.geolocation.getCurrentPosition(
+      async (pos) => {
+        try {
+          const { latitude, longitude } = pos.coords;
+          const url = `https://www.google.com/maps?q=${latitude},${longitude}`;
+          await deliverMessage({ text: `📍 الموقع: ${url}` });
+        } catch (err) {
+          toast.error(err.message || "فشل إرسال الموقع");
+        } finally {
+          setSendingLocation(false);
+        }
+      },
+      (err) => {
+        setSendingLocation(false);
+        toast.error(err.code === err.PERMISSION_DENIED ? "تم رفض إذن الوصول للموقع" : "تعذر تحديد الموقع");
+      },
+      { enableHighAccuracy: true, timeout: 10000 },
+    );
   };
 
   const selectedDriver = driverMap.get(String(selectedDriverId));
@@ -218,6 +334,11 @@ export default function TripChatModal({ isOpen, onClose, tripId, tripLabel }) {
               {selectedDriver?.phone || "محادثة الرحلة"}
             </p>
           </div>
+          {paymentPaid && (
+            <span className="shrink-0 text-[11px] font-bold px-2.5 py-1 rounded-full bg-white/20 text-white">
+              تم الحجز
+            </span>
+          )}
         </div>
 
         {/* منطقة الرسائل — واتساب */}
@@ -241,6 +362,9 @@ export default function TripChatModal({ isOpen, onClose, tripId, tripLabel }) {
               const isOutgoing = !isDriverId(m.sender_id);
               const prev = threadMessages[i - 1];
               const showDate = !prev || new Date(prev.created_at).toDateString() !== new Date(m.created_at).toDateString();
+              const files = messageAttachments(m);
+              const location = parseLocationMessage(m.message);
+              const read = isMessageRead(m);
 
               return (
                 <div key={m.id}>
@@ -259,14 +383,41 @@ export default function TripChatModal({ isOpen, onClose, tripId, tripLabel }) {
                           : "bg-white text-gray-900 rounded-2xl rounded-tr-sm"
                       }`}
                     >
-                      <p className="whitespace-pre-wrap break-words text-right">{m.message}</p>
+                      {location ? (
+                        <a
+                          href={location.url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="flex items-center gap-1.5 font-semibold text-[#075e54]"
+                        >
+                          <MapPin className="w-4 h-4 shrink-0" />
+                          عرض الموقع على الخريطة
+                        </a>
+                      ) : (
+                        m.message && <p className="whitespace-pre-wrap break-words text-right">{m.message}</p>
+                      )}
+                      {files.length > 0 && (
+                        <div className={`grid gap-1.5 ${files.length > 1 ? "grid-cols-2" : "grid-cols-1"} ${m.message && !location ? "mt-1.5" : ""}`}>
+                          {files.map((url, idx) => (
+                            <a key={idx} href={url} target="_blank" rel="noreferrer" className="block">
+                              <img src={url} alt="مرفق" loading="lazy" className="w-full max-h-44 object-cover rounded-lg border border-black/10" />
+                            </a>
+                          ))}
+                        </div>
+                      )}
                       <div className={`flex items-center gap-1 mt-0.5 ${isOutgoing ? "justify-start" : "justify-end"}`}>
                         <span className="text-[10px] text-gray-400">{formatTime(m.created_at)}</span>
                         {isOutgoing && (
-                          <svg className="w-3.5 h-3.5 text-[#53bdeb]" viewBox="0 0 16 15" fill="currentColor">
-                            <path d="M15.01 3.316l-.478-.372a.365.365 0 0 0-.51.063L8.666 9.88a.32.32 0 0 1-.484.033l-.358-.325a.32.32 0 0 0-.484.032l-.378.483a.418.418 0 0 0 .036.541l1.32 1.266a.32.32 0 0 0 .484-.034l6.272-8.048a.366.366 0 0 0-.063-.51z" />
-                            <path d="M0.5 3.316l-.478-.372a.365.365 0 0 0-.51.063L4.156 9.88a.32.32 0 0 1-.484.033L1.01 6.7a.366.366 0 0 0-.515.006l-.423.433a.364.364 0 0 0 .006.514l3.258 3.185a.32.32 0 0 0 .484-.033l6.272-8.048a.365.365 0 0 0-.063-.51z" />
-                          </svg>
+                          read ? (
+                            <svg className="w-3.5 h-3.5 text-[#53bdeb]" viewBox="0 0 16 15" fill="currentColor" title="تمت القراءة">
+                              <path d="M15.01 3.316l-.478-.372a.365.365 0 0 0-.51.063L8.666 9.88a.32.32 0 0 1-.484.033l-.358-.325a.32.32 0 0 0-.484.032l-.378.483a.418.418 0 0 0 .036.541l1.32 1.266a.32.32 0 0 0 .484-.034l6.272-8.048a.366.366 0 0 0-.063-.51z" />
+                              <path d="M0.5 3.316l-.478-.372a.365.365 0 0 0-.51.063L4.156 9.88a.32.32 0 0 1-.484.033L1.01 6.7a.366.366 0 0 0-.515.006l-.423.433a.364.364 0 0 0 .006.514l3.258 3.185a.32.32 0 0 0 .484-.033l6.272-8.048a.365.365 0 0 0-.063-.51z" />
+                            </svg>
+                          ) : (
+                            <svg className="w-3.5 h-3.5 text-gray-400" viewBox="0 0 16 15" fill="currentColor" title="تم الإرسال">
+                              <path d="M15.01 3.316l-.478-.372a.365.365 0 0 0-.51.063L8.666 9.88a.32.32 0 0 1-.484.033l-.358-.325a.32.32 0 0 0-.484.032l-.378.483a.418.418 0 0 0 .036.541l1.32 1.266a.32.32 0 0 0 .484-.034l6.272-8.048a.366.366 0 0 0-.063-.51z" />
+                            </svg>
+                          )
                         )}
                       </div>
                     </div>
@@ -279,25 +430,80 @@ export default function TripChatModal({ isOpen, onClose, tripId, tripLabel }) {
         </div>
 
         {/* شريط الإدخال — واتساب */}
-        <div className="shrink-0 flex items-center gap-2 px-3 py-2.5 bg-[#f0f2f5] border-t border-gray-200">
-          <input
-            type="text"
-            value={inputText}
-            onChange={(e) => setInputText(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && handleSend()}
-            placeholder="اكتب رسالة..."
-            disabled={sending || !selectedDriverId}
-            className="flex-1 rounded-full border-0 bg-white px-4 py-2.5 text-sm text-right outline-none focus:ring-1 focus:ring-[#075e54]/30 disabled:opacity-50 shadow-sm"
-          />
-          <button
-            type="button"
-            onClick={handleSend}
-            disabled={sending || !inputText.trim() || !selectedDriverId}
-            className="shrink-0 w-11 h-11 rounded-full bg-[#075e54] text-white flex items-center justify-center hover:bg-[#128c7e] transition-colors disabled:opacity-40 shadow-sm"
-          >
-            <Send className="w-5 h-5 -scale-x-100" />
-          </button>
-        </div>
+        {paymentPaid ? (
+          <div className="shrink-0 px-4 py-3 bg-[#f0f2f5] border-t border-gray-200 text-center">
+            <p className="text-sm font-semibold text-gray-600">تم الحجز — تم إغلاق المحادثة لأن الرحلة أصبحت مدفوعة</p>
+            <p className="text-[11px] text-gray-400 mt-0.5">ستُعاد المحادثة تلقائيًا إذا تغيّرت حالة الدفع (مثلاً عند إلغاء إسناد السائق)</p>
+          </div>
+        ) : (
+          <div className="shrink-0 bg-[#f0f2f5] border-t border-gray-200 px-3 py-2.5">
+            {attachments.length > 0 && (
+              <div className="flex flex-wrap gap-2 mb-2">
+                {attachments.map((file, idx) => (
+                  <div key={idx} className="relative w-14 h-14 rounded-lg overflow-hidden border border-gray-300">
+                    <img src={URL.createObjectURL(file)} alt="مرفق" className="w-full h-full object-cover" />
+                    <button
+                      type="button"
+                      onClick={() => removeAttachment(idx)}
+                      className="absolute top-0.5 right-0.5 w-5 h-5 rounded-full bg-black/60 text-white text-xs flex items-center justify-center hover:bg-black"
+                    >
+                      ×
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div className="flex items-center gap-2">
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*"
+                multiple
+                onChange={handlePickFiles}
+                className="hidden"
+              />
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={sending || !selectedDriverId}
+                title="إرفاق صور"
+                className="shrink-0 w-10 h-10 rounded-full text-gray-500 hover:text-[#075e54] hover:bg-white flex items-center justify-center transition-colors disabled:opacity-40"
+              >
+                <Paperclip className="w-5 h-5" />
+              </button>
+              <button
+                type="button"
+                onClick={handleSendLocation}
+                disabled={sending || sendingLocation || !selectedDriverId}
+                title="إرسال الموقع الحالي"
+                className="shrink-0 w-10 h-10 rounded-full text-gray-500 hover:text-[#075e54] hover:bg-white flex items-center justify-center transition-colors disabled:opacity-40"
+              >
+                {sendingLocation ? (
+                  <div className="w-4 h-4 border-2 border-[#075e54] border-t-transparent rounded-full animate-spin" />
+                ) : (
+                  <MapPin className="w-5 h-5" />
+                )}
+              </button>
+              <input
+                type="text"
+                value={inputText}
+                onChange={(e) => setInputText(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && handleSend()}
+                placeholder="اكتب رسالة..."
+                disabled={sending || !selectedDriverId}
+                className="flex-1 rounded-full border-0 bg-white px-4 py-2.5 text-sm text-right outline-none focus:ring-1 focus:ring-[#075e54]/30 disabled:opacity-50 shadow-sm"
+              />
+              <button
+                type="button"
+                onClick={handleSend}
+                disabled={sending || (!inputText.trim() && attachments.length === 0) || !selectedDriverId}
+                className="shrink-0 w-11 h-11 rounded-full bg-[#075e54] text-white flex items-center justify-center hover:bg-[#128c7e] transition-colors disabled:opacity-40 shadow-sm"
+              >
+                <Send className="w-5 h-5 -scale-x-100" />
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     </AppModal>
   );
