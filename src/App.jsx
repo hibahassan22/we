@@ -12,6 +12,7 @@ import TripDetailsPage from "./components/TripDetailsPage";
 import NotificationsPage from "./components/NotificationsPage";
 import NotificationsBellPage from "./components/NotificationsBellPage";
 import UsersPage from "./components/UsersPage";
+import StaffUsersPage from "./components/StaffUsersPage";
 import ActivityLogPage from "./components/ActivityLogPage";
 import SettingsPage from "./components/SettingsPage";
 import RewardsPage from "./components/RewardsPage";
@@ -26,6 +27,8 @@ import PermissionsPage from "./components/PermissionsPage";
 import SystemManagementPage from "./components/SystemManagementPage";
 import AccountsPage from "./components/accounts/AccountsPage";
 import DriverAccountsPage from "./components/accounts/DriverAccountsPage";
+import ReportsPage from "./components/ReportsPage";
+import EmployeeReportsPage from "./components/EmployeeReportsPage";
 import NotFoundPage from "./components/NotFoundPage";
 
 function AdminPage({ children }) {
@@ -61,7 +64,11 @@ export default function App() {
           <Route path="/trips/:tripId" element={<AdminPage><TripDetailsPage /></AdminPage>} />
           <Route path="/notifications" element={<AdminPage><NotificationsPage /></AdminPage>} />
           <Route path="/alerts" element={<AdminPage><NotificationsBellPage /></AdminPage>} />
-          <Route path="/users" element={<AdminPage><UsersPage /></AdminPage>} />
+          <Route path="/users" element={<AdminPage><StaffUsersPage /></AdminPage>} />
+          <Route path="/accounts-users" element={<AdminPage><UsersPage /></AdminPage>} />
+          <Route path="/reports" element={<Navigate to="/reports/accounts" replace />} />
+          <Route path="/reports/accounts" element={<AdminPage><ReportsPage /></AdminPage>} />
+          <Route path="/reports/employees" element={<AdminPage><EmployeeReportsPage /></AdminPage>} />
           <Route path="/activity" element={<AdminPage><ActivityLogPage /></AdminPage>} />
           <Route path="/approvals" element={<AdminPage><ApprovalsPage /></AdminPage>} />
           <Route path="/permissions" element={<AdminPage><PermissionsPage /></AdminPage>} />

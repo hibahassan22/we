@@ -1,8 +1,6 @@
 import { useState, useEffect } from "react";
 import RoleSelector, { StatusSelector } from "./RoleSelector.jsx";
-import PermissionSelector from "./PermissionSelector.jsx";
 import { ROLES } from "../../lib/roles.js";
-import { isSalesLinkedRole } from "../../services/salesService.js";
 
 const inputCls =
   "w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:border-[#c9a84c] focus:outline-none bg-white text-right placeholder-gray-300";
@@ -25,7 +23,6 @@ export default function UserForm({
     phone: "",
     department: "",
     role: ROLES.SUPPORT,
-    permissions: [],
     status: "active",
   });
 
@@ -38,7 +35,6 @@ export default function UserForm({
         phone: initial.phone ?? "",
         department: initial.department ?? "",
         role: initial.role ?? ROLES.SUPPORT,
-        permissions: initial.permissions ?? [],
         status: initial.status ?? "active",
       });
     }
@@ -134,24 +130,13 @@ export default function UserForm({
         <div className="space-y-1.5">
           <label className="text-xs text-gray-500 block text-right">الدور</label>
           <RoleSelector value={form.role} onChange={(v) => set("role", v)} roles={roles} />
-          {isSalesLinkedRole(form.role) && (
-            <p className="text-[11px] text-amber-700 text-right leading-relaxed">
-              الدور يُحفظ في Firebase. عند الإنشاء يُسجَّل الموظف في نظام المبيعات بنفس معرّف Firebase (uid).
-            </p>
-          )}
         </div>
-        <div className="space-y-1.5">
-          <label className="text-xs text-gray-500 block text-right">الحالة</label>
-          <StatusSelector value={form.status} onChange={(v) => set("status", v)} />
-        </div>
-      </div>
-
-      <div className="space-y-1.5">
-        <label className="text-xs text-gray-500 block text-right">صلاحيات إضافية</label>
-        <PermissionSelector
-          selected={form.permissions}
-          onChange={(p) => set("permissions", p)}
-        />
+        {mode === "edit" && (
+          <div className="space-y-1.5">
+            <label className="text-xs text-gray-500 block text-right">الحالة</label>
+            <StatusSelector value={form.status} onChange={(v) => set("status", v)} />
+          </div>
+        )}
       </div>
 
       <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2 pt-2">

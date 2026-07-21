@@ -1,4 +1,7 @@
-const API_BASE = "/api";
+import { normalizeMediaUrl } from "../lib/driverMedia.js";
+
+// رابط مطلق — على السيرفر مفيش Vite proxy زي المحلي
+const API_BASE = "https://drivo1.elmoroj.com/api";
 
 async function parseJsonResponse(res) {
   const json = await res.json().catch(() => ({}));
@@ -103,20 +106,28 @@ function sortMessages(messages) {
 /** POST /api/driver-sale-chat/send — يدعم المرفقات (صور) عبر form-data */
 export async function sendDriverSaleChatMessage({ senderId, receiverId, message, attachments = [] }) {
   const files = Array.isArray(attachments) ? attachments.filter(Boolean) : [];
-  const text = String(message ?? "").trim();
+  // العمود message NOT NULL في الـ DB — لازم نص ظاهر مش فاضي/مسافة صفرية
+  const text = String(message ?? "").replace(/\u200b/g, "").trim() || (files.length ? "صورة" : "");
 
   if (files.length > 0) {
     const fd = new FormData();
-    fd.append("sender_id", senderId);
-    fd.append("receiver_id", receiverId);
+    fd.append("sender_id", String(senderId ?? ""));
+    fd.append("receiver_id", String(receiverId ?? ""));
     fd.append("message", text);
-    files.forEach((file) => fd.append("attachments[]", file));
+    files.forEach((file, i) => {
+      const name = file?.name || `image-${i + 1}.jpg`;
+      fd.append("attachments[]", file, name);
+    });
     const res = await fetch(`${API_BASE}/driver-sale-chat/send`, {
       method: "POST",
       headers: { Accept: "application/json" },
       body: fd,
     });
     return parseJsonResponse(res);
+  }
+
+  if (!text) {
+    throw new Error("أدخل رسالة أو أرفق صورة");
   }
 
   const res = await fetch(`${API_BASE}/driver-sale-chat/send`, {
@@ -131,19 +142,31 @@ export async function sendDriverSaleChatMessage({ senderId, receiverId, message,
   return parseJsonResponse(res);
 }
 
-/** مرفقات الرسالة كمصفوفة روابط */
+function attachmentToUrl(item) {
+  if (!item) return "";
+  if (typeof item === "string") return normalizeMediaUrl(item);
+  if (typeof item === "object") {
+    const raw = item.url ?? item.path ?? item.src ?? item.attachment ?? item.file ?? "";
+    return normalizeMediaUrl(raw);
+  }
+  return "";
+}
+
+/** مرفقات الرسالة كمصفوفة روابط جاهزة للعرض */
 export function messageAttachments(m) {
-  const raw = m?.attachments ?? m?.attachment ?? m?.files;
-  if (Array.isArray(raw)) return raw.filter(Boolean);
-  if (typeof raw === "string" && raw.trim()) {
+  const raw = m?.attachments ?? m?.attachment ?? m?.files ?? m?.images ?? m?.media;
+  let list = [];
+  if (Array.isArray(raw)) {
+    list = raw;
+  } else if (typeof raw === "string" && raw.trim()) {
     try {
       const parsed = JSON.parse(raw);
-      return Array.isArray(parsed) ? parsed.filter(Boolean) : [raw];
+      list = Array.isArray(parsed) ? parsed : [raw];
     } catch {
-      return [raw];
+      list = [raw];
     }
   }
-  return [];
+  return list.map(attachmentToUrl).filter(Boolean);
 }
 
 const MAP_LINK_RE = /https?:\/\/(?:www\.)?(?:google\.[^/\s]+\/maps\S+|maps\.google\.[^/\s]+\S*|maps\.app\.goo\.gl\/\S+|goo\.gl\/maps\/\S+)/i;

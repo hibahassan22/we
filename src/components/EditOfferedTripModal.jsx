@@ -10,7 +10,7 @@ import { fetchSalesList } from "../services/salesService.js";
 
 const API_BASE = "/api";
 
-export default function EditOfferedTripModal({ isOpen, onClose, trip, onSuccess, title }) {
+export default function EditOfferedTripModal({ isOpen, onClose, trip, onSuccess, title, zIndex }) {
   const toast = useToast();
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [form, setForm] = useState(buildOfferedTripEditForm(null));
@@ -81,9 +81,10 @@ export default function EditOfferedTripModal({ isOpen, onClose, trip, onSuccess,
     <AppModal
       isOpen={isOpen}
       onClose={onClose}
-      title={title ?? `تعديل الرحلة #${trip.id}`}
+      title={title ?? `تعديل الرحلة #${trip?.id}`}
       isSubmitting={isSubmitting}
       size="xl"
+      zIndex={zIndex}
     >
       <form onSubmit={handleSubmit} className="space-y-5" dir="rtl">
         <div>

@@ -98,7 +98,7 @@ const TripsLog = () => {
     const location = useLocation();
     const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
     const [assignModal, setAssignModal] = useState({ open: false, tripId: null, tripTotalPrice: "" });
-    const [chatModal, setChatModal] = useState({ open: false, tripId: null, tripLabel: "" });
+    const [chatModal, setChatModal] = useState({ open: false, tripId: null, tripLabel: "", trip: null });
     const [deleteModal, setDeleteModal] = useState({ open: false, trip: null });
     const [isDeletingTrip, setIsDeletingTrip] = useState(false);
     const [isStatusModalOpen, setIsStatusModalOpen] = useState(false);
@@ -422,6 +422,7 @@ const TripsLog = () => {
                                     open: true,
                                     tripId: trip.id,
                                     tripLabel: `${trip.from} → ${trip.to}`,
+                                    trip,
                                 })}
                                 className="flex items-center justify-center gap-1 bg-white border border-gray-300 text-gray-700 text-xs py-1.5 px-3 rounded hover:bg-gray-50 transition-colors"
                             >
@@ -612,7 +613,36 @@ const TripsLog = () => {
                 isOpen={chatModal.open}
                 tripId={chatModal.tripId}
                 tripLabel={chatModal.tripLabel}
-                onClose={() => setChatModal({ open: false, tripId: null, tripLabel: "" })}
+                trip={chatModal.trip}
+                onClose={() => setChatModal({ open: false, tripId: null, tripLabel: "", trip: null })}
+                onTripUpdated={(result) => {
+                    const updated = result?.trip ?? result;
+                    const tripId = chatModal.tripId;
+                    const driverId = result?.driver_id ?? result?.data?.driver_id ?? updated?.driver_id;
+                    const driver = result?.driver ?? result?.data?.driver ?? updated?.driver;
+                    if (driverId || driver) {
+                        setDriverStatusMap((prev) => ({ ...prev, [String(tripId)]: true }));
+                        setOfferedTrips((prev) => prev.map((t) => {
+                            if (String(t.id) !== String(tripId)) return t;
+                            return {
+                                ...t,
+                                driver_id: driverId ?? driver?.id ?? t.driver_id,
+                                driver: driver ?? (driverId ? { id: driverId } : t.driver),
+                            };
+                        }));
+                    }
+                    if (updated?.id) {
+                        const normalized = normalizeWithoutDriverTrip(updated);
+                        setTrips((prev) =>
+                            prev.map((t) => (t.id === updated.id ? { ...t, ...normalized } : t))
+                        );
+                        setOfferedTrips((prev) =>
+                            prev.map((t) => (t.id === updated.id ? { ...t, ...updated } : t))
+                        );
+                    } else {
+                        fetchTrips({ silent: true });
+                    }
+                }}
             />
 
             <ConfirmModal

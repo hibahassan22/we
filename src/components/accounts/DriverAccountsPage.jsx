@@ -8,7 +8,6 @@ import { exportToExcel } from "../../lib/exportExcel.js";
 import { useToast } from "../../lib/toast.jsx";
 
 const ITEMS_PER_PAGE = 8;
-const STORES = ["فرع الرياض", "فرع جدة", "فرع الدمام", "فرع مكة", "فرع المدينة"];
 const EMPLOYEES = ["سارة خالد", "نورة العتيبي", "ريم الشمري", "هند القحطاني"];
 const APPROVERS = ["م. أحمد السالم", "أ. خالد المطيري", "م. فهد العنزي", "أ. سعد الدوسري"];
 const CITIES = ["الرياض", "جدة", "الدمام", "مكة", "المدينة", "الخبر", "أبها", "الطائف"];
@@ -40,20 +39,34 @@ function buildMockRow(trip, driver, index) {
   const returnValue = random % 5 === 0 ? Math.round(amount * 0.1) : 0;
   const linkCommission = Math.round(amount * 0.05);
   const commission = Math.round(amount * 0.15);
-  const brokerCommission = Math.round(amount * 0.08);
+  const brokerCommission =
+    Number(trip?.broker_commission ?? trip?.brokerCommission) || Math.round(amount * 0.08);
   const net = Math.max(0, amount - brokerCommission);
   const collected = random % 3 !== 0;
+  const paidFromTrip = Number(trip?.amount_paid ?? trip?.paid_amount);
+  const remainingFromTrip = trip?.remaining_amount != null ? Number(trip.remaining_amount) : NaN;
+  const paid = Number.isFinite(paidFromTrip) && paidFromTrip > 0
+    ? paidFromTrip
+    : collected
+      ? Math.max(0, amount - returnValue)
+      : 0;
+  const remaining = Number.isFinite(remainingFromTrip)
+    ? remainingFromTrip
+    : collected
+      ? 0
+      : Math.max(0, amount - returnValue - paid);
   const tripFrom = trip?.from ?? CITIES[random % CITIES.length];
   const tripTo = trip?.to ?? CITIES[(random + 3) % CITIES.length];
+  const driverPhone = driver?.phone ?? driver?.phone_number ?? "—";
 
   return {
     id: `${trip?.id ?? "t"}-${driver?.id ?? index}`,
     tripId: trip?.id ?? trip?.trip_id ?? `TR-${1000 + index}`,
     driverId: driver?.id ?? null,
-    driverNumber: driver?.id != null ? String(driver.id) : `${1000 + index}`,
+    driverNumber: driverPhone,
     driverName: [driver?.name, driver?.last_name].filter(Boolean).join(" ") || "—",
     driverCode: driver?.id ? `DBY-${String(driver.id).slice(-4).toUpperCase()}` : `DBY-${1000 + index}`,
-    driverPhone: driver?.phone ?? "—",
+    driverPhone,
     driverAddress: driver?.address ?? driver?.city ?? "—",
     driverNationality: driver?.nationality ?? "—",
     driverEmail: driver?.email ?? "—",
@@ -62,13 +75,14 @@ function buildMockRow(trip, driver, index) {
     tripFrom,
     tripTo,
     route: `${tripFrom} ← ${tripTo}`,
-    store: STORES[random % STORES.length],
     employee: EMPLOYEES[random % EMPLOYEES.length],
     approvedBy: APPROVERS[random % APPROVERS.length],
     amount,
     returnValue,
     linkCommission,
     commission,
+    paid,
+    remaining,
     brokerCommission,
     net,
     status: collected ? "تم التحصيل" : "لم يتم",
@@ -118,7 +132,7 @@ function buildFinancialChanges(row) {
       id: `${row.id}-commission`,
       date: at(1),
       action: "احتساب العمولة",
-      detail: `عمولة الشركة ${fmtMoney(row.commission)} ر.س وعمولة الوسيط ${fmtMoney(row.brokerCommission)} ر.س — الصافي ${fmtMoney(row.net)} ر.س`,
+      detail: `عمولة الشركة ${fmtMoney(row.commission)} ر.س وعمولة وسيط ${fmtMoney(row.brokerCommission)} ر.س — الصافي ${fmtMoney(row.net)} ر.س`,
       tone: "gray",
     },
   ];
@@ -163,8 +177,8 @@ function DetailRow({ label, value, ltr }) {
 
 function DriverAccountDetailsView({ row, onBack }) {
   const [activeTab, setActiveTab] = useState("financial");
-  const banking = getDriverBankingData({ id: row.driverId ?? row.driverNumber, name: row.driverName });
-  const remaining = row.status === "تم التحصيل" ? 0 : Math.max(0, row.amount - row.returnValue);
+  const banking = getDriverBankingData({ id: row.driverId ?? row.driverPhone, name: row.driverName });
+  const remaining = row.remaining ?? (row.status === "تم التحصيل" ? 0 : Math.max(0, row.amount - row.returnValue));
   const changes = useMemo(() => buildFinancialChanges(row), [row]);
 
   const tabs = [
@@ -199,7 +213,7 @@ function DriverAccountDetailsView({ row, onBack }) {
             {banking.bankingStatus}
           </span>
           <span className="text-xs px-2.5 py-0.5 rounded-full bg-amber-50 text-[#b88121] font-semibold" dir="ltr">
-            رقم السائق: {row.driverNumber}
+            رقم السائق: {row.driverPhone}
           </span>
         </div>
         <div className="flex items-center gap-3">
@@ -238,9 +252,10 @@ function DriverAccountDetailsView({ row, onBack }) {
             <DetailRow label="المسار" value={row.route} />
             <DetailRow label="قيمة الرحلة" value={`${fmtMoney(row.amount)} ر.س`} />
             <DetailRow label="قيمة المرتجع" value={`${fmtMoney(row.returnValue)} ر.س`} />
-            <DetailRow label="عمولة الوسيط" value={`${fmtMoney(row.brokerCommission)} ر.س`} />
-            <DetailRow label="الصافي (بعد عمولة الوسيط)" value={`${fmtMoney(row.net)} ر.س`} />
+            <DetailRow label="عمولة وسيط" value={`${fmtMoney(row.brokerCommission)} ر.س`} />
+            <DetailRow label="الصافي (بعد عمولة وسيط)" value={`${fmtMoney(row.net)} ر.س`} />
             <DetailRow label="عمولتنا" value={`${fmtMoney(row.commission)} ر.س`} />
+            <DetailRow label="مدفوع" value={`${fmtMoney(row.paid)} ر.س`} />
             <DetailRow label="المتبقي" value={`${fmtMoney(remaining)} ر.س`} />
             <DetailRow label="حالة التحصيل" value={row.status} />
           </div>
@@ -251,7 +266,6 @@ function DriverAccountDetailsView({ row, onBack }) {
             <DetailRow label="صاحب الحساب" value={row.accountOwner} />
             <DetailRow label="البنك" value={row.bankName} />
             <DetailRow label="رقم الحساب" value={row.accountNumber} ltr />
-            <DetailRow label="المتجر" value={row.store} />
             <DetailRow label="الموظفة" value={row.employee} />
           </div>
         </div>
@@ -261,8 +275,7 @@ function DriverAccountDetailsView({ row, onBack }) {
         <div className="bg-white p-6 rounded-2xl border border-gray-100 shadow-sm space-y-3 max-w-2xl">
           <h3 className="text-sm font-bold text-[#c9a84c]">المعلومات الشخصية</h3>
           <DetailRow label="اسم السائق" value={row.driverName} />
-          <DetailRow label="رقم السائق" value={row.driverNumber} ltr />
-          <DetailRow label="الهاتف" value={row.driverPhone} ltr />
+          <DetailRow label="رقم السائق" value={row.driverPhone} ltr />
           <DetailRow label="المدينة" value={row.driverAddress} />
           <DetailRow label="الجنسية" value={row.driverNationality} />
           <DetailRow label="البريد الإلكتروني" value={row.driverEmail} ltr />
@@ -297,7 +310,7 @@ function DriverAccountDetailsView({ row, onBack }) {
 }
 
 function CustomerAccountDetailsView({ row, onBack }) {
-  const remaining = row.status === "تم التحصيل" ? 0 : Math.max(0, row.amount - row.returnValue);
+  const remaining = row.remaining ?? (row.status === "تم التحصيل" ? 0 : Math.max(0, row.amount - row.returnValue));
   return (
     <div dir="rtl" className="w-full space-y-4">
       <button
@@ -336,8 +349,9 @@ function CustomerAccountDetailsView({ row, onBack }) {
           <h3 className="text-sm font-bold text-[#c9a84c]">التفاصيل المالية</h3>
           <DetailRow label="قيمة الرحلة" value={`${fmtMoney(row.amount)} ر.س`} />
           <DetailRow label="قيمة المرتجع" value={`${fmtMoney(row.returnValue)} ر.س`} />
-          <DetailRow label="عمولة الوسيط" value={`${fmtMoney(row.brokerCommission)} ر.س`} />
-          <DetailRow label="الصافي (بعد عمولة الوسيط)" value={`${fmtMoney(row.net)} ر.س`} />
+          <DetailRow label="عمولة وسيط" value={`${fmtMoney(row.brokerCommission)} ر.س`} />
+          <DetailRow label="الصافي (بعد عمولة وسيط)" value={`${fmtMoney(row.net)} ر.س`} />
+          <DetailRow label="مدفوع" value={`${fmtMoney(row.paid)} ر.س`} />
           <DetailRow label="المتبقي" value={`${fmtMoney(remaining)} ر.س`} />
           <DetailRow label="حالة التحصيل" value={row.status} />
           <DetailRow label="اعتمد الدفعة" value={row.status === "تم التحصيل" ? row.approvedBy : "—"} />
@@ -411,11 +425,11 @@ export default function DriverAccountsPage() {
     return filterByGlobalSearch(byPeriod, searchQuery, (row) => [
       row.driverName,
       row.driverNumber,
+      row.driverPhone,
       row.driverCode,
       row.customerName,
       row.customerPhone,
       row.route,
-      row.store,
       row.employee,
       row.status,
       row.approvedBy,
@@ -427,7 +441,7 @@ export default function DriverAccountsPage() {
 
   const summary = useMemo(() => {
     const totalDebt = filteredRows.reduce((sum, row) => {
-      const banking = getDriverBankingData({ id: row.driverId ?? row.driverNumber, name: row.driverName });
+      const banking = getDriverBankingData({ id: row.driverId ?? row.driverPhone, name: row.driverName });
       return sum + (banking.isDebtor ? banking.balance : 0);
     }, 0);
     const dueCommissions = filteredRows.reduce((sum, row) => sum + (row.status === "لم يتم" ? row.commission : 0), 0);
@@ -450,16 +464,17 @@ export default function DriverAccountsPage() {
       exportToExcel(
         filteredRows.map((row) => ({
           "اسم السائق": row.driverName,
-          "رقم السائق": row.driverNumber,
+          "رقم السائق": row.driverPhone,
           "اسم العميل": row.customerName,
           "رقم العميل": row.customerPhone,
           "المسار": row.route,
-          "المتجر": row.store,
           "الموظفة": row.employee,
           "الصافي": row.net,
           "قيمة المرتجع": row.returnValue,
-          "عمولة الوسيط": row.brokerCommission,
           "العمولة": row.commission,
+          "مدفوع": row.paid,
+          "متبقي": row.remaining,
+          "عمولة وسيط": row.brokerCommission,
           "الحالة": row.status,
           "اعتمد الدفعة": row.status === "تم التحصيل" ? row.approvedBy : "—",
           "صاحب الحساب": row.accountOwner,
@@ -549,12 +564,13 @@ export default function DriverAccountsPage() {
                     "اسم العميل",
                     "رقم العميل",
                     "المسار",
-                    "المتجر",
                     "الموظفة",
                     "الصافي",
                     "قيمة المرتجع",
-                    "عمولة الوسيط",
                     "العمولة",
+                    "مدفوع",
+                    "متبقي",
+                    "عمولة وسيط",
                     "الحالة",
                     "صاحب الحساب",
                     "البنك",
@@ -575,7 +591,7 @@ export default function DriverAccountsPage() {
                     </td>
                     <td className="px-3 py-3 whitespace-nowrap" dir="ltr">
                       <button type="button" onClick={() => setSelectedDriver(row)} className="text-[#c9a84c] hover:underline">
-                        {row.driverNumber}
+                        {row.driverPhone}
                       </button>
                     </td>
                     <td className="px-3 py-3 whitespace-nowrap">
@@ -589,12 +605,13 @@ export default function DriverAccountsPage() {
                       </button>
                     </td>
                     <td className="px-3 py-3 text-gray-600 whitespace-nowrap">{row.route}</td>
-                    <td className="px-3 py-3 text-gray-600 whitespace-nowrap">{row.store}</td>
                     <td className="px-3 py-3 text-gray-600 whitespace-nowrap">{row.employee}</td>
                     <td className="px-3 py-3 font-semibold text-gray-800 whitespace-nowrap">{fmtMoney(row.net)}</td>
                     <td className="px-3 py-3 text-gray-600 whitespace-nowrap">{fmtMoney(row.returnValue)}</td>
-                    <td className="px-3 py-3 text-gray-600 whitespace-nowrap">{fmtMoney(row.brokerCommission)}</td>
                     <td className="px-3 py-3 text-gray-600 whitespace-nowrap">{fmtMoney(row.commission)}</td>
+                    <td className="px-3 py-3 text-gray-600 whitespace-nowrap">{fmtMoney(row.paid)}</td>
+                    <td className="px-3 py-3 text-gray-600 whitespace-nowrap">{fmtMoney(row.remaining)}</td>
+                    <td className="px-3 py-3 text-gray-600 whitespace-nowrap">{fmtMoney(row.brokerCommission)}</td>
                     <td className="px-3 py-3">
                       <span className={`text-[10px] px-2 py-1 rounded-lg font-bold ${
                         row.status === "تم التحصيل" ? "bg-green-50 text-green-600" : "bg-red-50 text-red-600"

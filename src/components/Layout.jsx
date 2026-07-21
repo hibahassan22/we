@@ -21,6 +21,7 @@ import {
 import { formatChatTime, driverDisplayName } from "../services/tripChatService.js";
 import { useToast } from "../lib/toast.jsx";
 import PageTransition from "./PageTransition";
+import ChatMediaImage from "./ui/ChatMediaImage.jsx";
 import { useGlobalSearch, getSearchPlaceholder } from "../hooks/useGlobalSearch";
 import { assetUrl } from "../lib/assetUrl.js";
 
@@ -45,7 +46,8 @@ const ALL_NAV = [
   { label:"سجل النشاطات",    route:"/activity",      icon: <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"/></svg> },
   { label:"مركز الموافقات",  route:"/approvals",     icon: <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg> },
   { label:"الصلاحيات",       route:"/permissions",   icon: <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z"/></svg> },
-  { label:"المستخدمين",      route:"/users",         icon: <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/></svg> },
+  { label:"المستخدمين",      route:"/users",         icon: <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"/></svg> },
+  { label:"الأكاونتات",      route:"/accounts-users", icon: <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M3 7a2 2 0 012-2h14a2 2 0 012 2v10a2 2 0 01-2 2H5a2 2 0 01-2-2V7zm0 3h18M7 15h1m4 0h1" /></svg> },
   { label:"إدارة النظام",    route:"/system",        icon: <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg> },
   { label:"الاعدادات",       route:"/settings",      icon: <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg> },
 ];
@@ -56,9 +58,18 @@ const ACCOUNTS_NAV = {
   children: [
     { label: "حسابات السائقين", route: "/accounts/drivers" },
     { label: "الدفعات", route: "/accounts/payments" },
-    { label: "الموظفين", route: "/accounts/employees" },
+    { label: "الأكاونتات", route: "/accounts/employees" },
     { label: "الاستردادات", route: "/accounts/refunds" },
     { label: "المصروفات", route: "/accounts/expenses" },
+  ],
+};
+
+const REPORTS_NAV = {
+  label: "التقارير",
+  icon: <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>,
+  children: [
+    { label: "تقارير الأكاونتات", route: "/reports/accounts" },
+    { label: "تقارير الموظفين", route: "/reports/employees" },
   ],
 };
 
@@ -66,6 +77,10 @@ function isAccountsChildRoute(pathname) {
   return ACCOUNTS_NAV.children.some(
     (child) => pathname === child.route || pathname.startsWith(`${child.route}/`),
   );
+}
+
+function isReportsChildRoute(pathname) {
+  return pathname === "/reports" || pathname.startsWith("/reports/");
 }
 
 function NotificationsDropdown({ onClose }) {
@@ -509,10 +524,8 @@ function ChatModal({ isOpen, onClose, currentUser }) {
                               <div className={`grid gap-1.5 ${files.length > 1 ? "grid-cols-2" : "grid-cols-1"} ${m.message && !location ? "mt-2" : ""}`}>
                                 {files.map((url, idx) => (
                                   <a key={idx} href={url} target="_blank" rel="noreferrer" className="block">
-                                    <img
+                                    <ChatMediaImage
                                       src={url}
-                                      alt="مرفق"
-                                      loading="lazy"
                                       className="w-full max-h-44 object-cover rounded-lg border border-black/10"
                                     />
                                   </a>
@@ -644,6 +657,7 @@ export default function Layout({ children }) {
   const [chatOpen,  setChatOpen]  = useState(false);
   const [bellOpen,  setBellOpen]  = useState(false);
   const [accountsOpen, setAccountsOpen] = useState(() => isAccountsChildRoute(location.pathname));
+  const [reportsOpen, setReportsOpen] = useState(() => isReportsChildRoute(location.pathname));
   const unreadCount = useUnreadCount();
   const chatUnreadCount = useChatUnreadCount();
   const { searchQuery, setSearchQuery } = useGlobalSearch();
@@ -661,6 +675,12 @@ export default function Layout({ children }) {
     }
   }, [location.pathname]);
 
+  useEffect(() => {
+    if (isReportsChildRoute(location.pathname)) {
+      setReportsOpen(true);
+    }
+  }, [location.pathname]);
+
   const { isAdmin, canRoute } = usePermissions();
   const firstName = user?.firstName ?? user?.fullName?.split(" ")[0] ?? "";
   const lastName  = user?.lastName  ?? "";
@@ -669,7 +689,9 @@ export default function Layout({ children }) {
 
   const navItems = ALL_NAV.filter((item) => isAdmin || canRoute(item.route));
   const accountsChildren = ACCOUNTS_NAV.children.filter((item) => isAdmin || canRoute(item.route));
+  const reportsChildren = REPORTS_NAV.children.filter((item) => isAdmin || canRoute(item.route));
   const showAccountsNav = accountsChildren.length > 0;
+  const showReportsNav = reportsChildren.length > 0;
 
   const renderNavButton = (item) => {
     const active =
@@ -761,6 +783,68 @@ export default function Layout({ children }) {
     );
   };
 
+  const renderReportsNav = () => {
+    const groupActive = isReportsChildRoute(location.pathname);
+
+    return (
+      <div className="space-y-0.5">
+        <button
+          type="button"
+          onClick={() => setReportsOpen((open) => !open)}
+          className={
+            "w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all duration-200 text-right group " +
+            (groupActive
+              ? "text-white shadow-sm scale-[1.01]"
+              : "text-gray-400 hover:text-white hover:scale-[1.01]")
+          }
+          style={groupActive ? { background: "linear-gradient(90deg,#9C6402,#E6C76A)" } : undefined}
+          onMouseEnter={(e) => { if (!groupActive) e.currentTarget.style.background = "linear-gradient(90deg,#9C6402,#E6C76A)"; }}
+          onMouseLeave={(e) => { if (!groupActive) e.currentTarget.style.background = ""; }}
+        >
+          <span className={"shrink-0 transition-transform group-hover:scale-110 " + (groupActive ? "text-white" : "text-gray-500 group-hover:text-white")}>
+            {REPORTS_NAV.icon}
+          </span>
+          <span className="truncate flex-1">{REPORTS_NAV.label}</span>
+          <svg
+            className={`w-3.5 h-3.5 shrink-0 transition-transform ${reportsOpen ? "rotate-180" : ""} ${groupActive ? "text-white" : "text-gray-500 group-hover:text-white"}`}
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+          </svg>
+        </button>
+
+        {reportsOpen && (
+          <div className="mr-3 pr-2 border-r border-[#c9a84c]/20 space-y-0.5">
+            {reportsChildren.map((child) => {
+              const active =
+                location.pathname === child.route ||
+                location.pathname.startsWith(`${child.route}/`);
+
+              return (
+                <button
+                  key={child.route}
+                  type="button"
+                  onClick={() => navigate(child.route)}
+                  className={
+                    "w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium transition-all duration-200 text-right " +
+                    (active
+                      ? "bg-[#c9a84c]/20 text-[#f5d98b] border border-[#c9a84c]/25"
+                      : "text-gray-500 hover:text-white hover:bg-white/5")
+                  }
+                >
+                  <span className="truncate flex-1">{child.label}</span>
+                  {active && <span className="w-1.5 h-1.5 bg-[#c9a84c] rounded-full shrink-0" />}
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    );
+  };
+
   return (
     <div
       className="flex h-screen font-sans overflow-hidden"
@@ -792,12 +876,17 @@ export default function Layout({ children }) {
             const beforeSettings = settingsIndex >= 0 ? navItems.slice(0, settingsIndex) : navItems;
             const settingsAndAfter = settingsIndex >= 0 ? navItems.slice(settingsIndex) : [];
             const [firstNavItem, ...restBeforeSettings] = beforeSettings;
+            const systemIndex = restBeforeSettings.findIndex((item) => item.route === "/system");
+            const beforeSystem = systemIndex >= 0 ? restBeforeSettings.slice(0, systemIndex) : restBeforeSettings;
+            const fromSystem = systemIndex >= 0 ? restBeforeSettings.slice(systemIndex) : [];
 
             return (
               <>
                 {firstNavItem && renderNavButton(firstNavItem)}
                 {showAccountsNav && renderAccountsNav()}
-                {restBeforeSettings.map((item) => renderNavButton(item))}
+                {beforeSystem.map((item) => renderNavButton(item))}
+                {showReportsNav && renderReportsNav()}
+                {fromSystem.map((item) => renderNavButton(item))}
                 {settingsAndAfter.map((item) => renderNavButton(item))}
               </>
             );

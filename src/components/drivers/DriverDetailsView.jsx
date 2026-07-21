@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { Plus, Eye, Edit2, MapPin, Calendar } from "lucide-react";
 import AddPaymentModal from "../AddPaymentModal";
 import EditOfferedTripModal from "../EditOfferedTripModal";
@@ -117,18 +117,51 @@ function DriverDocumentsGrid({ driver }) {
 }
 
 const TRIP_STATUS = {
-  completed: { label: "مكتملة", cls: "bg-green-600 text-white" },
-  in_progress: { label: "قيد التنفيذ", cls: "bg-blue-600 text-white" },
-  progress: { label: "قيد التنفيذ", cls: "bg-blue-600 text-white" },
-  cancelled: { label: "ملغية", cls: "bg-red-600 text-white" },
-  pending: { label: "معلقة", cls: "bg-gray-400 text-white" },
-  offered: { label: "معروضة", cls: "bg-amber-600 text-white" },
-  تم: { label: "مكتملة", cls: "bg-green-600 text-white" },
-  "قيد التنفيذ": { label: "قيد التنفيذ", cls: "bg-blue-600 text-white" },
+  completed: { label: "مكتملة", cls: "bg-green-600 text-white", cardCls: "text-green-600", key: "completed" },
+  in_progress: { label: "قيد التنفيذ", cls: "bg-blue-600 text-white", cardCls: "text-blue-600", key: "in_progress" },
+  progress: { label: "قيد التنفيذ", cls: "bg-blue-600 text-white", cardCls: "text-blue-600", key: "in_progress" },
+  cancelled: { label: "ملغاة", cls: "bg-red-600 text-white", cardCls: "text-red-600", key: "cancelled" },
+  pending: { label: "معلقة", cls: "bg-gray-400 text-white", cardCls: "text-gray-600", key: "pending" },
+  offered: { label: "معروضة", cls: "bg-amber-600 text-white", cardCls: "text-amber-600", key: "offered" },
+  تم: { label: "مكتملة", cls: "bg-green-600 text-white", cardCls: "text-green-600", key: "completed" },
+  "قيد التنفيذ": { label: "قيد التنفيذ", cls: "bg-blue-600 text-white", cardCls: "text-blue-600", key: "in_progress" },
+  ملغاة: { label: "ملغاة", cls: "bg-red-600 text-white", cardCls: "text-red-600", key: "cancelled" },
+  ملغية: { label: "ملغاة", cls: "bg-red-600 text-white", cardCls: "text-red-600", key: "cancelled" },
+  معلقة: { label: "معلقة", cls: "bg-gray-400 text-white", cardCls: "text-gray-600", key: "pending" },
+  معروضة: { label: "معروضة", cls: "bg-amber-600 text-white", cardCls: "text-amber-600", key: "offered" },
 };
-const tripStatusInfo = (s) => TRIP_STATUS[s] || { label: s || "—", cls: "bg-gray-200 text-gray-600" };
 
-function DriverTripsTab({ driverId, driverName, tripsCount, totalDues, refreshKey = 0 }) {
+const STATUS_SUMMARY_ORDER = [
+  { key: "completed", label: "مكتملة", cardCls: "text-green-600" },
+  { key: "cancelled", label: "ملغاة", cardCls: "text-red-600" },
+  { key: "in_progress", label: "قيد التنفيذ", cardCls: "text-blue-600" },
+  { key: "pending", label: "معلقة", cardCls: "text-gray-600" },
+  { key: "offered", label: "معروضة", cardCls: "text-amber-600" },
+];
+
+function normalizeTripStatusKey(raw) {
+  const s = String(raw ?? "").toLowerCase().trim();
+  if (!s) return "unknown";
+  if (s === "تم" || s === "completed" || s === "done" || s === "finished" || s === "complete" || s === "مكتملة") return "completed";
+  if (s === "cancelled" || s === "canceled" || s.includes("cancel") || s.includes("الغاء") || s.includes("إلغاء") || s === "ملغاة" || s === "ملغي" || s === "ملغية") return "cancelled";
+  if (s === "in_progress" || s === "progress" || s === "جارية" || s === "قيد التنفيذ") return "in_progress";
+  if (s === "offered" || s === "معروضة") return "offered";
+  if (s === "pending" || s === "معلق" || s === "معلقة" || s === "بانتظار") return "pending";
+  const mapped = TRIP_STATUS[raw]?.key ?? TRIP_STATUS[s]?.key;
+  return mapped || "other";
+}
+
+const tripStatusInfo = (s) => {
+  const key = normalizeTripStatusKey(s);
+  const known = STATUS_SUMMARY_ORDER.find((x) => x.key === key);
+  if (known) {
+    const base = TRIP_STATUS[key] || TRIP_STATUS.pending;
+    return { label: known.label, cls: base.cls, key };
+  }
+  return TRIP_STATUS[s] || { label: s || "أخرى", cls: "bg-gray-200 text-gray-600", key: "other" };
+};
+
+function DriverTripsTab({ driverId, driverName, tripsCount, refreshKey = 0 }) {
   const [trips, setTrips] = useState([]);
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(1);
@@ -162,32 +195,36 @@ function DriverTripsTab({ driverId, driverName, tripsCount, totalDues, refreshKe
   }, [driverId]);
 
   useEffect(() => { loadTrips(); }, [loadTrips, refreshKey]);
+  useEffect(() => { setPage(1); }, [trips.length]);
+
+  const statusCounts = useMemo(() => {
+    const counts = { completed: 0, cancelled: 0, in_progress: 0, pending: 0, offered: 0, other: 0 };
+    trips.forEach((trip) => {
+      const key = normalizeTripStatusKey(trip.trip_status ?? trip.status);
+      if (counts[key] != null) counts[key] += 1;
+      else counts.other += 1;
+    });
+    return counts;
+  }, [trips]);
 
   const totalPages = Math.max(1, Math.ceil(trips.length / PER_PAGE));
   const paged = trips.slice((page - 1) * PER_PAGE, page * PER_PAGE);
   const pageNumbers = getPageNumbers(page, totalPages);
+  const totalTrips = tripsCount ?? trips.length ?? 0;
 
   return (
     <div className="space-y-4" dir="rtl">
-      <div className="grid grid-cols-2 gap-4">
-        <div className="border border-gray-100 rounded-xl p-4 flex items-center justify-between bg-white shadow-sm">
-          <div className="w-10 h-10 rounded-full flex items-center justify-center" style={{ background: "linear-gradient(135deg,#9C6402,#E6C76A)" }}>
-            <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7" /></svg>
-          </div>
-          <div className="text-right">
-            <p className="text-xl font-bold text-gray-800">{tripsCount ?? trips.length ?? 0}</p>
-            <p className="text-xs text-gray-400 mt-0.5">إجمالي عدد الرحلات</p>
-          </div>
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+        <div className="border border-gray-100 rounded-xl p-4 bg-white shadow-sm text-right">
+          <p className="text-xl font-bold text-[#c9a84c]">{totalTrips}</p>
+          <p className="text-xs text-gray-400 mt-1">إجمالي الرحلات</p>
         </div>
-        <div className="border border-gray-100 rounded-xl p-4 flex items-center justify-between bg-white shadow-sm">
-          <div className="w-10 h-10 rounded-full bg-gray-100 flex items-center justify-center">
-            <svg className="w-5 h-5 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8V7m0 1v8m0 0v1" /></svg>
+        {STATUS_SUMMARY_ORDER.map((item) => (
+          <div key={item.key} className="border border-gray-100 rounded-xl p-4 bg-white shadow-sm text-right">
+            <p className={`text-xl font-bold ${item.cardCls}`}>{statusCounts[item.key] || 0}</p>
+            <p className="text-xs text-gray-400 mt-1">{item.label}</p>
           </div>
-          <div className="text-right">
-            <p className="text-xl font-bold text-gray-800">{fmtMoney(totalDues)} ر.س</p>
-            <p className="text-xs text-gray-400 mt-0.5">إجمالي المستحقات</p>
-          </div>
-        </div>
+        ))}
       </div>
 
       {loading ? (
@@ -384,6 +421,379 @@ function tripFinancials(trip) {
   const payments = Array.isArray(trip.payments) ? trip.payments : [];
   const paymentsCount = payments.length || Number(trip.payments_count ?? 0) || 0;
   return { total, paid, remaining, commission, paymentsCount };
+}
+
+function buildDriverFinancialChanges(trips = [], refunds = []) {
+  const changes = [];
+
+  trips.forEach((trip) => {
+    const tripId = trip.id ?? trip.trip_id;
+    const f = tripFinancials(trip);
+    const route = [trip.from, trip.to].filter(Boolean).join(" → ");
+    const tripLabel = route ? `رحلة #${tripId} (${route})` : `رحلة #${tripId}`;
+    const created = trip.created_at ?? trip.start_date ?? trip.trip_date;
+
+    if (f.total > 0) {
+      changes.push({
+        id: `trip-${tripId}-price`,
+        date: created,
+        tripId,
+        action: "تحديد سعر الرحلة",
+        detail: `${tripLabel}: تم تحديد سعر الرحلة بـ ${fmtMoney(f.total)} ر.س`,
+        tone: "gold",
+      });
+    }
+
+    if (f.commission !== 0) {
+      changes.push({
+        id: `trip-${tripId}-commission`,
+        date: trip.commission_transfer_date ?? trip.updated_at ?? created,
+        tripId,
+        action: "احتساب العمولة",
+        detail: `${tripLabel}: عمولتنا ${fmtMoney(f.commission)} ر.س`,
+        tone: "gray",
+      });
+    }
+
+    const payments = Array.isArray(trip.payments) ? trip.payments : [];
+    payments.forEach((p, idx) => {
+      const amount = Number(p.paid_amount ?? p.amount ?? p.payment_amount ?? 0) || 0;
+      const method = p.transfer_method ?? p.method ?? p.payment_method;
+      const approvedBy =
+        p.approved_by_name ?? p.approved_by ?? p.sales_name ?? p.sales?.name ?? p.employee_name;
+      const note = p.notes ?? p.payment_note ?? p.note;
+      const parts = [
+        `${tripLabel}: تحصيل ${fmtMoney(amount)} ر.س`,
+        method ? `بطريقة ${method}` : null,
+        note ? `— ${note}` : null,
+      ].filter(Boolean);
+
+      changes.push({
+        id: `pay-${p.id ?? `${tripId}-${idx}`}`,
+        date: p.payment_date ?? p.created_at ?? created,
+        tripId,
+        action: "تحصيل دفعة",
+        detail: parts.join(" "),
+        approvedBy: approvedBy || null,
+        tone: "green",
+      });
+    });
+
+    if (f.remaining > 0) {
+      changes.push({
+        id: `trip-${tripId}-remaining`,
+        date: trip.updated_at ?? created,
+        tripId,
+        action: "متبقي على الرحلة",
+        detail: `${tripLabel}: المتبقي ${fmtMoney(f.remaining)} ر.س من أصل ${fmtMoney(f.total)} ر.س`,
+        tone: "red",
+      });
+    }
+  });
+
+  refunds.forEach((r) => {
+    const tripId = r.tripId ?? r.tripNumber ?? r.trip_id;
+    const amount = Number(r.proposedAmount ?? r.confirmed_refund_amount ?? r.amount ?? 0) || 0;
+    const status = r.status ?? "";
+    const approved = /قبول|approved/i.test(String(status));
+    const rejected = /رفض|rejected/i.test(String(status));
+    changes.push({
+      id: `refund-${r.id ?? tripId}`,
+      date: r.date ?? r.created_at,
+      tripId,
+      action: approved ? "قبول استرداد" : rejected ? "رفض استرداد" : "طلب استرداد",
+      detail: `رحلة #${tripId}: ${fmtMoney(amount)} ر.س${r.reason ? ` — ${r.reason}` : ""}`,
+      tone: approved ? "red" : rejected ? "gray" : "gold",
+    });
+  });
+
+  return changes.sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
+}
+
+const CHANGE_TONE = {
+  gold: "bg-amber-50 text-[#b88121] border-amber-200",
+  green: "bg-green-50 text-green-600 border-green-200",
+  red: "bg-red-50 text-red-600 border-red-200",
+  gray: "bg-gray-50 text-gray-600 border-gray-200",
+};
+
+function DriverFinancialChangesTab({ driverId, driverPhone, refreshKey = 0 }) {
+  const [changes, setChanges] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [tripFilter, setTripFilter] = useState("الكل");
+
+  useEffect(() => {
+    if (!driverId) return undefined;
+    const ctrl = new AbortController();
+    setLoading(true);
+    setError("");
+
+    Promise.all([
+      fetch(`${BASE}/driver-trips/${driverId}`, {
+        headers: { Accept: "application/json" },
+        signal: ctrl.signal,
+      }).then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))),
+      fetch(`${BASE}/all-refunds`, {
+        headers: { Accept: "application/json" },
+        signal: ctrl.signal,
+      })
+        .then((r) => (r.ok ? r.json() : { data: [] }))
+        .catch(() => ({ data: [] })),
+    ])
+      .then(([tripsRes, refundsRes]) => {
+        if (ctrl.signal.aborted) return;
+        const trips = Array.isArray(tripsRes?.trips) ? tripsRes.trips : [];
+        const tripIds = new Set(trips.map((t) => String(t.id ?? t.trip_id)));
+        const phone = String(driverPhone ?? "").replace(/\D/g, "");
+        const allRefunds = Array.isArray(refundsRes?.data) ? refundsRes.data : [];
+        const refunds = allRefunds.filter((r) => {
+          const tid = String(r.tripId ?? r.tripNumber ?? r.trip_id ?? "");
+          if (tripIds.has(tid)) return true;
+          const rPhone = String(r.driverNumber ?? r.driver_phone ?? "").replace(/\D/g, "");
+          return phone && rPhone && (rPhone.endsWith(phone) || phone.endsWith(rPhone));
+        });
+        setChanges(buildDriverFinancialChanges(trips, refunds));
+        setLoading(false);
+      })
+      .catch((err) => {
+        if (err?.name === "AbortError") return;
+        if (!ctrl.signal.aborted) {
+          setError(err.message || "فشل تحميل سجل التغيرات المالية");
+          setLoading(false);
+        }
+      });
+
+    return () => ctrl.abort();
+  }, [driverId, driverPhone, refreshKey]);
+
+  const tripOptions = Array.from(
+    new Set(changes.map((c) => String(c.tripId)).filter((id) => id && id !== "undefined" && id !== "null"))
+  );
+
+  const filtered =
+    tripFilter === "الكل" ? changes : changes.filter((c) => String(c.tripId) === String(tripFilter));
+
+  if (loading) {
+    return (
+      <div className="flex justify-center py-10">
+        <div className="w-8 h-8 border-4 border-[#c9a84c] border-t-transparent rounded-full animate-spin" />
+      </div>
+    );
+  }
+
+  if (error) {
+    return <p className="text-center text-sm text-red-500 py-8">{error}</p>;
+  }
+
+  return (
+    <div className="space-y-4" dir="rtl">
+      <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <label className="text-xs text-gray-500 shrink-0">تصفية بالرحلة</label>
+          <select
+            value={tripFilter}
+            onChange={(e) => setTripFilter(e.target.value)}
+            className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-[#c9a84c]/30"
+          >
+            <option value="الكل">كل الرحلات</option>
+            {tripOptions.map((id) => (
+              <option key={id} value={id}>
+                رحلة #{id}
+              </option>
+            ))}
+          </select>
+        </div>
+        <p className="text-xs text-gray-400">{filtered.length} تغيير مالي</p>
+      </div>
+
+      {filtered.length === 0 ? (
+        <p className="text-center text-sm text-gray-400 py-8">لا توجد تغيرات مالية مسجلة</p>
+      ) : (
+        <div className="bg-white p-6 rounded-2xl border border-gray-100 shadow-sm space-y-3">
+          <h3 className="text-sm font-bold text-[#c9a84c]">سجل التغيرات المالية</h3>
+          <div className="space-y-3">
+            {filtered.map((c) => (
+              <div key={c.id} className="flex items-start gap-3 border-b border-gray-50 pb-3 last:border-0">
+                <span className={`shrink-0 text-[11px] px-2.5 py-1 rounded-lg font-bold border ${CHANGE_TONE[c.tone] || CHANGE_TONE.gray}`}>
+                  {c.action}
+                </span>
+                <div className="flex-1 text-right min-w-0">
+                  <p className="text-sm text-gray-700 leading-relaxed">{c.detail}</p>
+                  <div className="flex flex-wrap gap-x-3 gap-y-0.5 mt-0.5">
+                    <p className="text-[11px] text-gray-400">{fmtDate(c.date)}</p>
+                    {c.tripId != null && (
+                      <p className="text-[11px] text-[#c9a84c] font-semibold">رحلة #{c.tripId}</p>
+                    )}
+                    {c.approvedBy && (
+                      <p className="text-[11px] text-green-600 font-semibold">اعتمدها: {c.approvedBy}</p>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+const DRIVER_ACTIVITY_ACTIONS = {
+  create_trip: { label: "إنشاء رحلة", tone: "gold" },
+  edit_trip: { label: "تعديل رحلة", tone: "gray" },
+  delete_trip: { label: "حذف رحلة", tone: "red" },
+  assign_driver: { label: "إسناد سائق", tone: "gold" },
+  unassign_driver: { label: "إلغاء إسناد", tone: "red" },
+  trip_payment: { label: "دفعة", tone: "green" },
+  approve_trip: { label: "موافقة رحلة", tone: "green" },
+  reject_trip: { label: "رفض رحلة", tone: "red" },
+  driver_violation: { label: "مخالفة / تنبيه", tone: "red" },
+  status_changed: { label: "تغيير الحالة", tone: "gold" },
+  update_driver: { label: "تعديل بيانات", tone: "gray" },
+  create_driver: { label: "إنشاء سائق", tone: "green" },
+  refund: { label: "استرداد", tone: "red" },
+  trip_refund: { label: "استرداد", tone: "red" },
+  add_note: { label: "ملاحظة", tone: "gray" },
+  rating: { label: "تقييم", tone: "gold" },
+};
+
+function activityActionInfo(actionType) {
+  return DRIVER_ACTIVITY_ACTIONS[actionType] || { label: actionType || "تغيير", tone: "gray" };
+}
+
+function formatActivityDateTime(raw) {
+  if (!raw) return { date: "—", time: "" };
+  const d = new Date(String(raw).replace(" ", "T"));
+  if (Number.isNaN(d.getTime())) return { date: String(raw), time: "" };
+  return {
+    date: d.toLocaleDateString("ar-EG"),
+    time: d.toLocaleTimeString("ar-EG", { hour: "2-digit", minute: "2-digit" }),
+  };
+}
+
+/** سجل كل التغيرات على السائق من /logs/driver/{id} */
+function DriverActivityChangesTab({ driverId, refreshKey = 0 }) {
+  const [logs, setLogs] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [actionFilter, setActionFilter] = useState("الكل");
+
+  useEffect(() => {
+    if (!driverId) return undefined;
+    const ctrl = new AbortController();
+    setLoading(true);
+    setError("");
+
+    fetch(`${BASE}/logs/driver/${encodeURIComponent(driverId)}`, {
+      headers: { Accept: "application/json" },
+      signal: ctrl.signal,
+    })
+      .then((r) => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.json();
+      })
+      .then((data) => {
+        if (ctrl.signal.aborted) return;
+        const list = Array.isArray(data?.logs) ? data.logs : Array.isArray(data?.data) ? data.data : Array.isArray(data) ? data : [];
+        setLogs(
+          [...list].sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0))
+        );
+        setLoading(false);
+      })
+      .catch((err) => {
+        if (err?.name === "AbortError") return;
+        if (!ctrl.signal.aborted) {
+          setError(err.message || "فشل تحميل سجل التغيرات");
+          setLoading(false);
+        }
+      });
+
+    return () => ctrl.abort();
+  }, [driverId, refreshKey]);
+
+  const actionTypes = ["الكل", ...new Set(logs.map((l) => l.action_type).filter(Boolean))];
+  const filtered =
+    actionFilter === "الكل" ? logs : logs.filter((l) => l.action_type === actionFilter);
+
+  if (loading) {
+    return (
+      <div className="flex justify-center py-10">
+        <div className="w-8 h-8 border-4 border-[#c9a84c] border-t-transparent rounded-full animate-spin" />
+      </div>
+    );
+  }
+
+  if (error) {
+    return <p className="text-center text-sm text-red-500 py-8">{error}</p>;
+  }
+
+  return (
+    <div className="space-y-4" dir="rtl">
+      <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <label className="text-xs text-gray-500 shrink-0">نوع التغيير</label>
+          <select
+            value={actionFilter}
+            onChange={(e) => setActionFilter(e.target.value)}
+            className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-[#c9a84c]/30"
+          >
+            {actionTypes.map((t) => (
+              <option key={t} value={t}>
+                {t === "الكل" ? "كل الأنواع" : activityActionInfo(t).label}
+              </option>
+            ))}
+          </select>
+        </div>
+        <p className="text-xs text-gray-400">{filtered.length} تغيير</p>
+      </div>
+
+      {filtered.length === 0 ? (
+        <p className="text-center text-sm text-gray-400 py-8">لا توجد تغيرات مسجلة لهذا السائق</p>
+      ) : (
+        <div className="bg-white p-6 rounded-2xl border border-gray-100 shadow-sm space-y-3">
+          <h3 className="text-sm font-bold text-[#c9a84c]">سجل التغيرات</h3>
+          <div className="space-y-3">
+            {filtered.map((log) => {
+              const info = activityActionInfo(log.action_type);
+              const { date, time } = formatActivityDateTime(log.created_at);
+              const byName =
+                log.sales_user?.name ??
+                log.admin?.name ??
+                log.performed_by_name ??
+                log.user_name ??
+                null;
+              const title = log.title || info.label;
+              const description = log.description || "—";
+
+              return (
+                <div key={log.id} className="flex items-start gap-3 border-b border-gray-50 pb-3 last:border-0">
+                  <span className={`shrink-0 text-[11px] px-2.5 py-1 rounded-lg font-bold border ${CHANGE_TONE[info.tone] || CHANGE_TONE.gray}`}>
+                    {info.label}
+                  </span>
+                  <div className="flex-1 text-right min-w-0">
+                    <p className="text-sm font-semibold text-gray-800">{title}</p>
+                    <p className="text-sm text-gray-600 leading-relaxed mt-0.5">{description}</p>
+                    <div className="flex flex-wrap gap-x-3 gap-y-0.5 mt-1">
+                      <p className="text-[11px] text-gray-400">
+                        {date}{time ? ` • ${time}` : ""}
+                      </p>
+                      {log.trip_id != null && (
+                        <p className="text-[11px] text-[#c9a84c] font-semibold">رحلة #{log.trip_id}</p>
+                      )}
+                      {byName && (
+                        <p className="text-[11px] text-green-600 font-semibold">بواسطة: {byName}</p>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
 }
 
 function DriverFinancialsTab({ driverId, refreshKey = 0 }) {
@@ -779,6 +1189,8 @@ export default function DriverDetailsView({
     { id: "personal", label: "المعلومات الشخصية" },
     { id: "trips", label: "سجل الرحلات" },
     { id: "financials", label: "التفاصيل المالية" },
+    { id: "financialChanges", label: "سجل التغيرات المالية" },
+    { id: "changes", label: "سجل التغيرات" },
     { id: "violations", label: "المخالفات والتنبيهات" },
     { id: "notes", label: "الملاحظات" },
     { id: "ratings", label: "التقييمات" },
@@ -886,7 +1298,7 @@ export default function DriverDetailsView({
             <div className="space-y-4">
               <div className="bg-white p-6 rounded-2xl border border-gray-100 shadow-sm space-y-3">
                 <h3 className="text-sm font-bold text-[#c9a84c]">المعلومات المالية</h3>
-                {[["اسم البنك", d?.bank_name], ["صاحب الحساب", d?.account_owner], ["رقم حساب السائق", d?.bank_account_number], ["الآيبان", d?.iban]].map(([label, value]) => (
+                {[["اسم البنك", d?.bank_name], ["صاحب الحساب", d?.account_owner || d?.account_holder_name], ["رقم حساب السائق", d?.bank_account_number || d?.driver_bank_account_number], ["الآيبان", d?.iban], ["رصيد المحفظة", d?.wallet_balance != null ? `${Number(d.wallet_balance).toLocaleString("ar-SA")} ر.س` : null], ["الحالة البنكية", d?.bank_status || d?.banking_status]].map(([label, value]) => (
                   <div key={label} className="flex justify-between border-b border-gray-50 pb-2 text-sm">
                     <span className="text-gray-400">{label}</span>
                     <span className="text-gray-700 font-medium" dir={label === "رقم حساب السائق" || label === "الآيبان" ? "ltr" : undefined}>{value || "—"}</span>
@@ -919,6 +1331,14 @@ export default function DriverDetailsView({
 
         {activeTab === "financials" && (
           <DriverFinancialsTab driverId={driverId} refreshKey={tripsRefreshKey} />
+        )}
+
+        {activeTab === "financialChanges" && (
+          <DriverFinancialChangesTab driverId={driverId} driverPhone={d?.phone} refreshKey={tripsRefreshKey} />
+        )}
+
+        {activeTab === "changes" && (
+          <DriverActivityChangesTab driverId={driverId} refreshKey={tripsRefreshKey} />
         )}
 
         {activeTab === "notes" && (

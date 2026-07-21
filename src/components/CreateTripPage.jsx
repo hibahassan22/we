@@ -72,7 +72,7 @@ export default function CreateTripPage() {
   const navigate = useNavigate();
   const { trips, setTrips, loading, error, retry } = useOfferedTrips();
   const [assignModal, setAssignModal] = useState({ open: false, tripId: null, tripTotalPrice: "" });
-  const [chatModal, setChatModal] = useState({ open: false, tripId: null, tripLabel: "" });
+  const [chatModal, setChatModal] = useState({ open: false, tripId: null, tripLabel: "", trip: null });
   const [editModal, setEditModal] = useState({ open: false, trip: null });
   const [deleteModal, setDeleteModal] = useState({ open: false, trip: null });
   const [isDeletingTrip, setIsDeletingTrip] = useState(false);
@@ -354,6 +354,7 @@ export default function CreateTripPage() {
                     open: true,
                     tripId: trip.id,
                     tripLabel: `${trip.from} → ${trip.to}`,
+                    trip,
                   })}
                   className="flex items-center justify-center gap-1 bg-white border border-gray-300 text-gray-700 text-xs py-1.5 px-3 rounded hover:bg-gray-50 transition-colors"
                 >
@@ -402,7 +403,28 @@ export default function CreateTripPage() {
         isOpen={chatModal.open}
         tripId={chatModal.tripId}
         tripLabel={chatModal.tripLabel}
-        onClose={() => setChatModal({ open: false, tripId: null, tripLabel: "" })}
+        trip={chatModal.trip}
+        onClose={() => setChatModal({ open: false, tripId: null, tripLabel: "", trip: null })}
+        onTripUpdated={(result) => {
+          const updated = result?.trip ?? result;
+          const tripId = chatModal.tripId;
+          const driverId = result?.driver_id ?? result?.data?.driver_id ?? updated?.driver_id;
+          const driver = result?.driver ?? result?.data?.driver ?? updated?.driver;
+          if (driverId || driver) {
+            setTrips((prev) => prev.map((t) => {
+              if (String(t.id) !== String(tripId)) return t;
+              return {
+                ...t,
+                driver_id: driverId ?? driver?.id ?? t.driver_id,
+                driver: driver ?? (driverId ? { id: driverId } : t.driver),
+              };
+            }));
+          }
+          if (updated?.id) {
+            setTrips((prev) => prev.map((t) => (String(t.id) === String(updated.id) ? { ...t, ...updated } : t)));
+          }
+          window.dispatchEvent(new CustomEvent("trips-list-refresh"));
+        }}
       />
 
       <ConfirmModal

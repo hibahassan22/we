@@ -11,8 +11,9 @@ import { X, Loader2 } from "lucide-react";
  *   title           {string}
  *   subtitle        {string?}
  *   isSubmitting    {boolean?}  — يقفل الخلفية والحقول أثناء الحفظ
- *   size            {'sm'|'md'|'lg'|'xl'?}
+ *   size            {'sm'|'md'|'lg'|'xl'|'2xl'?}
  *   closeOnBackdrop {boolean?}
+ *   bodyScroll      {boolean?}  — false يمنع سكرول جسم المودال (للشات)
  *   children        {ReactNode}
  *   footer          {ReactNode?}
  */
@@ -21,6 +22,7 @@ const SIZE_CLASS = {
   md: "max-w-md",
   lg: "max-w-lg",
   xl: "max-w-2xl",
+  "2xl": "max-w-5xl",
 };
 
 export default function AppModal({
@@ -31,6 +33,7 @@ export default function AppModal({
   isSubmitting = false,
   size = "md",
   closeOnBackdrop,
+  bodyScroll = true,
   zIndex = 9999,
   children,
   footer,
@@ -135,7 +138,7 @@ export default function AppModal({
             </div>
 
             {/* Body */}
-            <div className="relative flex-1 overflow-y-auto overscroll-contain">
+            <div className={`relative flex-1 overscroll-contain ${bodyScroll ? "overflow-y-auto" : "overflow-hidden"}`}>
               {isSubmitting && (
                 <div
                   className="absolute inset-0 z-10 flex items-center justify-center bg-white/80 backdrop-blur-[1px]"
@@ -149,7 +152,7 @@ export default function AppModal({
                   </div>
                 </div>
               )}
-              <div className={`p-5 sm:p-6 ${isSubmitting ? "pointer-events-none select-none" : ""}`}>
+              <div className={`p-5 sm:p-6 ${bodyScroll ? "" : "h-full overflow-hidden"} ${isSubmitting ? "pointer-events-none select-none" : ""}`}>
                 {children}
               </div>
             </div>

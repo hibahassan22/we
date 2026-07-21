@@ -2,18 +2,30 @@ import { useState, useEffect, useCallback, useMemo } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useGlobalSearch } from "../../hooks/useGlobalSearch";
 import { filterByGlobalSearch } from "../../lib/searchUtils";
-import { fetchAccountsSummary, fetchMonthlyReport } from "../../services/accountsService";
+import {
+  fetchAccountsSummary,
+  fetchMonthlyReport,
+  buildEmployeeFinance,
+} from "../../services/accountsService";
 import { fetchApprovedPayments, normalizeApprovedPayment } from "../../services/paymentRequestService.js";
 import { fetchAllRefunds } from "../../services/refundService";
 import RefundHandleModal from "../approvals/RefundHandleModal";
 import { exportToExcel } from "../../lib/exportExcel.js";
 import { useToast } from "../../lib/toast.jsx";
+import {
+  getAllAccountMeta,
+  enrichUserWithAccount,
+  groupUsersByAccount,
+  formatAccountPhone,
+  syncAccountMetaFromSales,
+} from "../../services/accountRegistryService.js";
+import { salesRecordToUser } from "../../services/salesService.js";
 
 const BASE = "https://drivo1.elmoroj.com/api";
 
 const TABS = [
   { id: "payments", label: "الدفعات", route: "/accounts/payments" },
-  { id: "employees", label: "الموظفين", route: "/accounts/employees" },
+  { id: "employees", label: "الأكاونتات", route: "/accounts/employees" },
   { id: "refunds", label: "الاستردادات", route: "/accounts/refunds" },
   { id: "expenses", label: "المصروفات", route: "/accounts/expenses" },
 ];
@@ -25,7 +37,7 @@ const fmtMoney = (v) => {
 
 const fmtDate = (v) => {
   if (!v) return "—";
-  const d = new Date(v);
+  const d = new Date(String(v).replace(" ", "T"));
   return Number.isNaN(d.getTime()) ? "—" : d.toLocaleDateString("en-GB");
 };
 
@@ -166,48 +178,95 @@ function PaymentsTab({ payments, loading }) {
   );
 }
 
-function EmployeesTab({ sales, loading }) {
+function getSaleTarget(sale) {
+  const n = Number(sale?.target ?? sale?.main_target ?? sale?.admin_target ?? 0);
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+function AccountsTab({ accounts, loading }) {
+  const [selectedKey, setSelectedKey] = useState("");
+
+  useEffect(() => {
+    if (!accounts.length) {
+      setSelectedKey("");
+      return;
+    }
+    if (!selectedKey || !accounts.some((a) => a.accountKey === selectedKey)) {
+      setSelectedKey(accounts[0].accountKey);
+    }
+  }, [accounts, selectedKey]);
+
   if (loading) return <LoadingBlock />;
-  if (!sales.length) return <EmptyBlock text="لا يوجد موظفين" />;
+  if (!accounts.length) return <EmptyBlock text="لا توجد أكونتات" />;
+
+  const selected = accounts.find((a) => a.accountKey === selectedKey) ?? accounts[0];
+  const target = selected?.target ?? 0;
+  const achieved = selected?.achieved ?? 0;
+  const percent = target > 0 ? Math.min(100, Math.round((achieved / target) * 1000) / 10) : 0;
 
   return (
-    <div className="space-y-3">
-      {sales.map((s) => {
-        const target = Number(s.target ?? s.admin_target ?? 0);
-        const mainTarget = Number(s.main_target ?? 0) || 1;
-        const pct = Math.min(100, Math.round((target / mainTarget) * 100)) || 0;
-        return (
-          <div key={s.id} className="bg-white border border-gray-100 rounded-2xl p-4 space-y-3">
-            <div className="flex items-start justify-between gap-3">
-              <span className="text-[10px] font-bold bg-amber-100 text-amber-700 px-2 py-1 rounded-full shrink-0">
-                {pct}% من الهدف
-              </span>
-              <div className="text-right flex-1 min-w-0">
-                <p className="text-sm font-bold text-gray-800">{s.name}</p>
-                <p className="text-xs text-gray-400 mt-0.5" dir="ltr">{s.phone}</p>
-              </div>
-              <div className="w-10 h-10 rounded-full bg-gradient-to-br from-[#9C6402] to-[#E6C76A] flex items-center justify-center text-white font-bold text-sm shrink-0">
-                {(s.name?.[0] ?? "م").toUpperCase()}
-              </div>
+    <div className="space-y-4" dir="rtl">
+      <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4">
+        <label className="text-xs font-medium text-gray-500 block text-right mb-1.5">اختر الأكونت</label>
+        <div className="relative">
+          <select
+            value={selected?.accountKey ?? ""}
+            onChange={(e) => setSelectedKey(e.target.value)}
+            className="w-full h-11 border border-gray-200 rounded-xl px-4 text-sm focus:border-[#c9a84c] focus:outline-none bg-white text-right appearance-none"
+          >
+            {accounts.map((account) => (
+              <option key={account.accountKey} value={account.accountKey}>
+                {account.accountName || "بدون اسم"}
+                {account.accountPhoneDisplay ? ` — ${account.accountPhoneDisplay}` : ""}
+              </option>
+            ))}
+          </select>
+          <div className="absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none text-gray-400">
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+            </svg>
+          </div>
+        </div>
+      </div>
+
+      {selected && (
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
+          <div className="flex items-center gap-3 mb-5">
+            <div className="w-12 h-12 rounded-full bg-gradient-to-br from-[#9C6402] to-[#E6C76A] flex items-center justify-center text-white font-bold shrink-0">
+              {(selected.accountName?.[0] || "#").toUpperCase()}
             </div>
-            <div className="grid grid-cols-3 gap-2 text-center">
-              {[
-                { label: "الصافي", val: target * 0.4 },
-                { label: "الربح", val: target * 0.35 },
-                { label: "إجمالي المدخلات", val: target },
-              ].map((box) => (
-                <div key={box.label} className="bg-[#faf7f0] rounded-xl py-2 px-1">
-                  <p className="text-[10px] text-gray-400">{box.label}</p>
-                  <p className="text-sm font-bold text-gray-800">{fmtMoney(box.val)} <span className="text-[10px] font-normal">ريال</span></p>
-                </div>
-              ))}
-            </div>
-            <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
-              <div className="h-full rounded-full" style={{ width: `${pct}%`, background: "linear-gradient(90deg,#9C6402,#E6C76A)" }} />
+            <div className="text-right min-w-0">
+              <h2 className="text-lg font-bold text-gray-800 truncate">{selected.accountName || "—"}</h2>
+              <p className="text-xs text-gray-400 mt-0.5" dir="ltr">
+                {selected.accountPhoneDisplay || formatAccountPhone(selected.accountNumber) || "—"}
+              </p>
             </div>
           </div>
-        );
-      })}
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div className="rounded-xl border border-amber-100 bg-[#faf7f0] p-4 text-right">
+              <p className="text-[11px] text-gray-400">التارجت</p>
+              <p className="text-2xl font-extrabold text-gray-800 mt-1">
+                {fmtMoney(target)}
+                <span className="text-xs font-normal text-gray-400 mr-1">ر.س</span>
+              </p>
+            </div>
+            <div className="rounded-xl border border-amber-100 bg-[#faf7f0] p-4 text-right">
+              <p className="text-[11px] text-gray-400">نسبة التارجت</p>
+              <p className="text-2xl font-extrabold text-[#9C6402] mt-1">
+                {percent}
+                <span className="text-sm font-bold mr-0.5">%</span>
+              </p>
+              <div className="mt-3 h-2 rounded-full bg-white/80 overflow-hidden">
+                <div
+                  className="h-full rounded-full bg-gradient-to-l from-[#9C6402] to-[#E6C76A] transition-all"
+                  style={{ width: `${Math.min(100, percent)}%` }}
+                />
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -223,26 +282,26 @@ function RefundsTab({ refunds, loading, onRefresh }) {
       <div className="space-y-3">
         {refunds.map((r) => {
           const status = String(r.status ?? "pending").toLowerCase();
-          const pending = status === "pending" || status === "معلق";
+          const pending = status === "pending" || status === "معلق" || status === "بانتظار";
           return (
-            <div key={r.id ?? r.tripId} className="bg-white border border-gray-100 rounded-2xl p-4 space-y-3">
-              <div className="flex items-center justify-end gap-2 flex-wrap">
-                <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${pending ? "bg-amber-100 text-amber-600" : "bg-green-100 text-green-600"}`}>
+            <div key={r.id ?? r.tripId} className="bg-white border border-gray-100 rounded-2xl p-4 text-right space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${pending ? "bg-amber-100 text-amber-700" : "bg-green-100 text-green-700"}`}>
                   {pending ? "معلق" : "تمت المعالجة"}
                 </span>
-                <p className="text-sm font-bold text-gray-800">طلب استرداد — رحلة #{r.tripId ?? r.trip_id}</p>
+                <p className="text-sm font-bold text-gray-800">رحلة #{r.tripId ?? r.trip_id}</p>
               </div>
-              <div className="bg-[#faf7f0] rounded-xl p-3 text-xs text-right space-y-1">
-                <div className="flex justify-between gap-2"><span>{fmtMoney(r.proposed_refund_amount ?? r.proposedAmount)} ر.س</span><span className="text-gray-500">المبلغ المقترح</span></div>
-                <div className="flex justify-between gap-2"><span>{r.refund_reason ?? r.reason ?? "—"}</span><span className="text-gray-500">السبب</span></div>
-              </div>
+              <p className="text-xs text-gray-500">{r.refund_reason ?? r.reason ?? "—"}</p>
+              <p className="text-sm font-semibold text-gray-800">
+                {fmtMoney(r.proposed_refund_amount ?? r.proposedAmount)} ر.س
+              </p>
               {pending && (
                 <button
                   type="button"
                   onClick={() => setModal(r)}
-                  className="w-full py-2.5 bg-[#c9a84c] hover:bg-[#b8973d] text-white text-sm font-bold rounded-xl"
+                  className="w-full mt-1 py-2 rounded-xl bg-[#c9a84c] hover:bg-[#b8973d] text-white text-sm font-medium"
                 >
-                  معالجة الطلب
+                  معالجة طلب الاسترداد
                 </button>
               )}
             </div>
@@ -260,12 +319,17 @@ function RefundsTab({ refunds, loading, onRefresh }) {
 }
 
 function ExpensesTab({ expenses, loading, onRefresh }) {
-  const [showAdd, setShowAdd] = useState(false);
+  const toast = useToast();
   const [form, setForm] = useState({ type: "", amount_sar: "", amount_egp: "", expense_date: "", description: "" });
   const [saving, setSaving] = useState(false);
 
+  if (loading) return <LoadingBlock />;
+
   const handleAdd = async () => {
-    if (!form.type.trim()) return;
+    if (!form.type.trim() || !form.amount_sar) {
+      toast.error("أدخل نوع المصروف والمبلغ");
+      return;
+    }
     setSaving(true);
     try {
       const res = await fetch(`${BASE}/expenses`, {
@@ -273,85 +337,88 @@ function ExpensesTab({ expenses, loading, onRefresh }) {
         headers: { Accept: "application/json", "Content-Type": "application/json" },
         body: JSON.stringify({
           type: form.type.trim(),
-          amount_sar: Number(form.amount_sar) || 0,
-          amount_egp: Number(form.amount_egp) || 0,
+          amount_sar: Number(form.amount_sar),
+          amount_egp: Number(form.amount_egp || 0),
           expense_date: form.expense_date || new Date().toISOString().slice(0, 10),
-          description: form.description?.trim() || "",
+          description: form.description.trim(),
         }),
       });
-      if (!res.ok) throw new Error("فشل الإضافة");
-      setShowAdd(false);
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json.message || `HTTP ${res.status}`);
+      toast.success("تم إضافة المصروف");
       setForm({ type: "", amount_sar: "", amount_egp: "", expense_date: "", description: "" });
-      onRefresh();
-    } catch {
-      alert("فشل إضافة المصروف");
+      onRefresh?.();
+    } catch (err) {
+      toast.error(err.message || "فشل إضافة المصروف");
     } finally {
       setSaving(false);
     }
   };
 
-  if (loading) return <LoadingBlock />;
-
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between gap-3 flex-wrap">
+      <div className="bg-white border border-gray-100 rounded-2xl p-4 space-y-3">
+        <h3 className="text-sm font-bold text-[#c9a84c] text-right">إضافة مصروف</h3>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <input
+            className="border border-gray-200 rounded-xl px-3 py-2 text-sm text-right"
+            placeholder="نوع المصروف"
+            value={form.type}
+            onChange={(e) => setForm({ ...form, type: e.target.value })}
+          />
+          <input
+            type="number"
+            className="border border-gray-200 rounded-xl px-3 py-2 text-sm text-right"
+            placeholder="المبلغ (ر.س)"
+            value={form.amount_sar}
+            onChange={(e) => setForm({ ...form, amount_sar: e.target.value })}
+            dir="ltr"
+          />
+          <input
+            type="number"
+            className="border border-gray-200 rounded-xl px-3 py-2 text-sm text-right"
+            placeholder="المبلغ (ج.م)"
+            value={form.amount_egp}
+            onChange={(e) => setForm({ ...form, amount_egp: e.target.value })}
+            dir="ltr"
+          />
+          <input
+            type="date"
+            className="border border-gray-200 rounded-xl px-3 py-2 text-sm text-right"
+            value={form.expense_date}
+            onChange={(e) => setForm({ ...form, expense_date: e.target.value })}
+          />
+          <input
+            className="border border-gray-200 rounded-xl px-3 py-2 text-sm text-right sm:col-span-2"
+            placeholder="الوصف"
+            value={form.description}
+            onChange={(e) => setForm({ ...form, description: e.target.value })}
+          />
+        </div>
         <button
           type="button"
-          onClick={() => setShowAdd(true)}
-          className="flex items-center gap-1.5 bg-[#4a4644] hover:bg-black text-white text-sm font-bold px-4 py-2.5 rounded-xl"
+          disabled={saving}
+          onClick={handleAdd}
+          className="w-full py-2.5 rounded-xl bg-[#4a4746] text-white text-sm font-semibold disabled:opacity-50"
         >
-          + إضافة مصروف
+          {saving ? "جاري الحفظ..." : "إضافة"}
         </button>
-        <h3 className="text-sm font-bold text-gray-800">قائمة المصروفات</h3>
       </div>
 
-      {expenses.length === 0 ? (
+      {!expenses.length ? (
         <EmptyBlock text="لا توجد مصروفات" />
       ) : (
-        <div className="bg-white border border-gray-100 rounded-2xl overflow-x-auto">
-          <table className="w-full text-sm text-right">
-            <thead>
-              <tr className="bg-[#faf7f0] border-b border-gray-100">
-                <th className="px-4 py-3 text-xs font-semibold text-gray-500">النوع</th>
-                <th className="px-4 py-3 text-xs font-semibold text-gray-500">المبلغ (ريال)</th>
-                <th className="px-4 py-3 text-xs font-semibold text-gray-500">المبلغ (جنية)</th>
-                <th className="px-4 py-3 text-xs font-semibold text-gray-500">التاريخ</th>
-                <th className="px-4 py-3 text-xs font-semibold text-gray-500">الوصف</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-50">
-              {expenses.map((e) => (
-                <tr key={e.id} className="hover:bg-gray-50/50">
-                  <td className="px-4 py-3 font-medium text-gray-800">{e.type}</td>
-                  <td className="px-4 py-3 text-gray-600">{fmtMoney(e.amount_sar)}</td>
-                  <td className="px-4 py-3 text-gray-600">{fmtMoney(e.amount_egp)}</td>
-                  <td className="px-4 py-3 text-gray-400 text-xs">{e.expense_date}</td>
-                  <td className="px-4 py-3 text-gray-500 text-xs">{e.description || "—"}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-
-      {showAdd && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => setShowAdd(false)}>
-          <div className="bg-white rounded-2xl p-5 w-full max-w-md space-y-3" dir="rtl" onClick={(e) => e.stopPropagation()}>
-            <h3 className="text-sm font-bold text-gray-800 text-right">إضافة مصروف</h3>
-            <input className="w-full border rounded-xl px-3 py-2 text-sm text-right" placeholder="النوع" value={form.type} onChange={(e) => setForm((p) => ({ ...p, type: e.target.value }))} />
-            <div className="grid grid-cols-2 gap-2">
-              <input className="border rounded-xl px-3 py-2 text-sm" placeholder="ريال" dir="ltr" value={form.amount_sar} onChange={(e) => setForm((p) => ({ ...p, amount_sar: e.target.value }))} />
-              <input className="border rounded-xl px-3 py-2 text-sm" placeholder="جنية" dir="ltr" value={form.amount_egp} onChange={(e) => setForm((p) => ({ ...p, amount_egp: e.target.value }))} />
+        <div className="space-y-2">
+          {expenses.map((e, i) => (
+            <div key={e.id ?? i} className="bg-white border border-gray-100 rounded-2xl p-4 flex justify-between gap-3 text-right">
+              <div>
+                <p className="text-sm font-bold text-gray-800">{e.type}</p>
+                <p className="text-xs text-gray-400 mt-0.5">{e.description || "—"}</p>
+                <p className="text-[11px] text-gray-400 mt-1">{e.expense_date ?? "—"}</p>
+              </div>
+              <p className="text-sm font-bold text-gray-800 shrink-0">{fmtMoney(e.amount_sar)} ر.س</p>
             </div>
-            <input type="date" className="w-full border rounded-xl px-3 py-2 text-sm" value={form.expense_date} onChange={(e) => setForm((p) => ({ ...p, expense_date: e.target.value }))} />
-            <input className="w-full border rounded-xl px-3 py-2 text-sm text-right" placeholder="الوصف" value={form.description} onChange={(e) => setForm((p) => ({ ...p, description: e.target.value }))} />
-            <div className="flex gap-2 justify-end pt-2">
-              <button type="button" onClick={() => setShowAdd(false)} className="px-4 py-2 border rounded-xl text-sm">إلغاء</button>
-              <button type="button" disabled={saving} onClick={handleAdd} className="px-4 py-2 bg-[#c9a84c] text-white rounded-xl text-sm font-bold disabled:opacity-60">
-                {saving ? "جارٍ الحفظ..." : "إضافة"}
-              </button>
-            </div>
-          </div>
+          ))}
         </div>
       )}
     </div>
@@ -368,7 +435,7 @@ function LoadingBlock() {
 
 function EmptyBlock({ text }) {
   return (
-    <div className="text-center py-16 bg-white rounded-2xl border border-gray-100 text-sm text-gray-400">
+    <div className="bg-white border border-gray-100 rounded-2xl py-12 text-center text-sm text-gray-400">
       {text}
     </div>
   );
@@ -376,27 +443,27 @@ function EmptyBlock({ text }) {
 
 export default function AccountsPage() {
   const navigate = useNavigate();
-  const { tab: tabParam } = useParams();
-  const activeTab = TABS.some((t) => t.id === tabParam) ? tabParam : "payments";
+  const { tab } = useParams();
+  const activeTab = TABS.some((t) => t.id === tab) ? tab : "payments";
   const { searchQuery } = useGlobalSearch();
   const toast = useToast();
 
-  const [loading, setLoading] = useState(true);
   const [summary, setSummary] = useState(null);
   const [monthlyReport, setMonthlyReport] = useState(null);
   const [refunds, setRefunds] = useState([]);
   const [approvedPayments, setApprovedPayments] = useState([]);
+  const [loading, setLoading] = useState(true);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [data, report, refundsData, paymentsData] = await Promise.all([
+      const [sum, report, refundsData, paymentsData] = await Promise.all([
         fetchAccountsSummary(),
         fetchMonthlyReport().catch(() => null),
         fetchAllRefunds().catch(() => []),
         fetchApprovedPayments().catch(() => []),
       ]);
-      setSummary(data);
+      setSummary(sum);
       setMonthlyReport(report);
       setRefunds(refundsData);
       setApprovedPayments(paymentsData.map(normalizeApprovedPayment));
@@ -416,12 +483,55 @@ export default function AccountsPage() {
 
   const payments = useMemo(() => approvedPayments, [approvedPayments]);
 
+  const employeesFinance = useMemo(
+    () => buildEmployeeFinance(summary?.sales ?? [], summary?.trips ?? [], refunds.length ? refunds : (summary?.refunds ?? [])),
+    [summary, refunds],
+  );
+
+  const financeById = useMemo(() => {
+    const map = new Map();
+    employeesFinance.forEach((emp) => map.set(String(emp.id), emp));
+    return map;
+  }, [employeesFinance]);
+
+  const accountsList = useMemo(() => {
+    const sales = summary?.sales ?? [];
+    syncAccountMetaFromSales(sales);
+    const meta = getAllAccountMeta();
+    const enriched = sales.map((sale) => {
+      const user = enrichUserWithAccount(salesRecordToUser(sale), meta[String(sale.id)]);
+      const finance = financeById.get(String(sale.id));
+      return {
+        ...user,
+        name: sale.name,
+        target: getSaleTarget(sale),
+        revenue: finance?.revenue ?? 0,
+        role_id: sale.role_id,
+      };
+    });
+
+    return groupUsersByAccount(enriched).map((account) => {
+      const members = account.members ?? [];
+      const target = members.reduce((sum, m) => sum + getSaleTarget(m), 0);
+      const achieved = members.reduce((sum, m) => sum + (Number(m.revenue) || 0), 0);
+      return {
+        ...account,
+        target,
+        achieved,
+        members,
+      };
+    });
+  }, [summary, financeById]);
+
   const filteredPayments = filterByGlobalSearch(payments, searchQuery, (p) => [
     p.driverName, p.notes, String(p.amount), String(p.tripId),
     p.fromAccount, p.toAccount, p.transferMethod,
   ]);
-  const filteredSales = filterByGlobalSearch(summary?.sales ?? [], searchQuery, (s) => [
-    s.name, s.phone, s.email,
+  const filteredAccounts = filterByGlobalSearch(accountsList, searchQuery, (a) => [
+    a.accountName,
+    a.accountPhoneDisplay,
+    a.accountNumber,
+    ...(a.members ?? []).flatMap((m) => [m.fullName, m.name, m.email, m.phone]),
   ]);
   const filteredRefunds = filterByGlobalSearch(refunds, searchQuery, (r) => [
     r.tripId, r.trip_id, r.refund_reason, r.reason,
@@ -449,19 +559,18 @@ export default function AccountsPage() {
         "الحالة": "معتمدة",
       }));
     } else if (activeTab === "employees") {
-      filename = "الموظفين";
-      rows = filteredSales.map((s) => {
-        const target = Number(s.target ?? s.admin_target ?? 0);
-        const mainTarget = Number(s.main_target ?? 0) || 1;
-        const pct = Math.min(100, Math.round((target / mainTarget) * 100)) || 0;
+      filename = "الأكاونتات";
+      rows = filteredAccounts.map((a) => {
+        const target = a.target ?? 0;
+        const achieved = a.achieved ?? 0;
+        const percent = target > 0 ? Math.round((achieved / target) * 1000) / 10 : 0;
         return {
-          "الاسم": s.name ?? "—",
-          "الهاتف": s.phone ?? "—",
-          "البريد": s.email ?? "—",
-          "إجمالي المدخلات": target,
-          "الربح": target * 0.35,
-          "الصافي": target * 0.4,
-          "نسبة الهدف": `${pct}%`,
+          "اسم الأكونت": a.accountName ?? "—",
+          "رقم الأكونت": a.accountPhoneDisplay || a.accountNumber || "—",
+          "عدد الموظفين": a.memberCount ?? a.members?.length ?? 0,
+          "التارجت (ر.س)": target,
+          "المحقق (ر.س)": achieved,
+          "نسبة التارجت %": percent,
         };
       });
     } else if (activeTab === "refunds") {
@@ -500,7 +609,7 @@ export default function AccountsPage() {
       <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 text-right">
         <div>
           <h1 className="text-xl font-bold text-[#c9a84c]">الإدارة المالية المتقدمة</h1>
-          <p className="text-xs text-gray-400 mt-0.5">نظام شامل لإدارة الوارد والمصروفات والموظفين</p>
+          <p className="text-xs text-gray-400 mt-0.5">نظام شامل لإدارة الوارد والمصروفات والأكونتات</p>
         </div>
         <div className="flex gap-2 shrink-0">
           <button type="button" onClick={handleExport} className="px-4 py-2 bg-[#c9a84c] hover:bg-[#b8973d] rounded-xl text-sm font-bold text-white">
@@ -538,7 +647,7 @@ export default function AccountsPage() {
       />
 
       {activeTab === "payments" && <PaymentsTab payments={filteredPayments} loading={loading} />}
-      {activeTab === "employees" && <EmployeesTab sales={filteredSales} loading={loading} />}
+      {activeTab === "employees" && <AccountsTab accounts={filteredAccounts} loading={loading} />}
       {activeTab === "refunds" && <RefundsTab refunds={filteredRefunds} loading={loading} onRefresh={load} />}
       {activeTab === "expenses" && <ExpensesTab expenses={filteredExpenses} loading={loading} onRefresh={load} />}
     </div>

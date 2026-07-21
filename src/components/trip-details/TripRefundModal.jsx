@@ -1,19 +1,35 @@
 import { useEffect, useState } from "react";
+import { Wallet, Landmark, Users } from "lucide-react";
 import { useToast } from "../../lib/toast";
 import AppModal, { ModalField, ModalActions, modalInputClass } from "../ui/AppModal";
 import { createTripRefundRequest } from "../../services/refundService";
 
-const REFUND_METHODS = ["تحويل بنكي", "نقدي", "محفظة إلكترونية"];
-
-const emptyForm = () => ({
-  amount: "",
-  method: "",
-  accountName: "",
-  iban: "",
-  bankTo: "",
-  bankName: "",
-  reason: "",
-});
+const REFUND_METHODS = [
+  {
+    key: "تحويل من حسابنا",
+    label: "تحويل من حسابنا",
+    desc: "استرداد المبلغ من حساب الشركة",
+    icon: Landmark,
+    color: "text-blue-500",
+    bg: "bg-blue-50",
+  },
+  {
+    key: "إرجاع إلى المحفظة",
+    label: "إرجاع إلى المحفظة",
+    desc: "إضافة المبلغ إلى محفظة العميل",
+    icon: Wallet,
+    color: "text-emerald-500",
+    bg: "bg-emerald-50",
+  },
+  {
+    key: "تحويل من سائق آخر",
+    label: "تحويل من سائق آخر",
+    desc: "خصم المبلغ من رصيد سائق آخر",
+    icon: Users,
+    color: "text-amber-500",
+    bg: "bg-amber-50",
+  },
+];
 
 function fmtMoney(v) {
   if (v == null || v === "") return "—";
@@ -21,50 +37,41 @@ function fmtMoney(v) {
   return Number.isFinite(n) ? n.toLocaleString("ar-SA") : String(v);
 }
 
-function buildBankDetails(form) {
-  const parts = [
-    form.accountName && `صاحب الحساب: ${form.accountName}`,
-    form.iban && `IBAN ${form.iban.replace(/^IBAN\s*/i, "")}`,
-    form.bankTo && `البنك المحول له: ${form.bankTo}`,
-    form.bankName && `اسم البنك: ${form.bankName}`,
-  ].filter(Boolean);
-  return parts.join(" | ");
-}
-
 /**
  * إنشاء طلب استرداد من التفاصيل المالية (أدمن) — POST /trip-refund/request
  */
-export default function TripRefundModal({ isOpen, onClose, tripId, driverId, amountPaid, onSuccess }) {
+export default function TripRefundModal({ isOpen, onClose, tripId, driverId, amountPaid, tripPrice, onSuccess }) {
   const toast = useToast();
-  const [form, setForm] = useState(emptyForm);
+  const [method, setMethod] = useState(null);
+  const [amount, setAmount] = useState("");
+  const [notes, setNotes] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   useEffect(() => {
-    if (isOpen) setForm(emptyForm());
+    if (isOpen) {
+      setMethod(null);
+      setAmount("");
+      setNotes("");
+    }
   }, [isOpen, tripId]);
-
-  const isBank = form.method === "تحويل بنكي";
 
   const handleSubmit = async () => {
     if (!driverId) {
       toast.error("لا يوجد سائق مرتبط بهذه الرحلة");
       return;
     }
-    const amount = Number(form.amount);
-    if (!Number.isFinite(amount) || amount <= 0) {
-      toast.error("أدخل مبلغ الاسترداد");
-      return;
-    }
-    if (!form.method) {
+    if (!method) {
       toast.error("اختر طريقة الاسترداد");
       return;
     }
-    if (!form.reason.trim()) {
-      toast.error("أدخل سبب الاسترداد");
+    const value = Number(amount);
+    if (!Number.isFinite(value) || value <= 0) {
+      toast.error("أدخل المبلغ المسترد");
       return;
     }
-    if (isBank && !form.iban.trim() && !form.accountName.trim()) {
-      toast.error("أدخل بيانات التحويل البنكي");
+    const paid = Number(amountPaid);
+    if (Number.isFinite(paid) && value > paid) {
+      toast.error("المبلغ المسترد لا يمكن أن يتجاوز المبلغ المدفوع");
       return;
     }
 
@@ -73,10 +80,11 @@ export default function TripRefundModal({ isOpen, onClose, tripId, driverId, amo
       await createTripRefundRequest({
         tripId,
         driverId,
-        proposedRefundAmount: amount,
-        refundMethod: form.method,
-        refundReason: form.reason.trim(),
-        bankTransferDetails: isBank ? buildBankDetails(form) : form.method,
+        proposedRefundAmount: value,
+        refundMethod: method,
+        refundReason: notes,
+        bankTransferDetails: notes,
+        notes,
       });
       toast.success("تم إرسال طلب الاسترداد بنجاح");
       onSuccess?.();
@@ -93,107 +101,101 @@ export default function TripRefundModal({ isOpen, onClose, tripId, driverId, amo
       isOpen={isOpen}
       onClose={onClose}
       title="معالجة طلب استرداد"
-      subtitle="أدخل تفاصيل المبلغ المراد استرداده"
+      subtitle="اختر طريقة الاسترداد"
       isSubmitting={isSubmitting}
       size="md"
     >
       <div className="space-y-4">
-        <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-right">
-          <p className="text-xs font-bold text-amber-800 mb-0.5">ملاحظة مهمة</p>
-          <p className="text-sm text-amber-900">
-            المبلغ الإجمالي المدفوع: <span className="font-bold">{fmtMoney(amountPaid)}</span> ريال
-          </p>
+        <div className="grid gap-2.5">
+          {REFUND_METHODS.map((m) => {
+            const Icon = m.icon;
+            const active = method === m.key;
+            return (
+              <button
+                key={m.key}
+                type="button"
+                disabled={isSubmitting}
+                onClick={() => setMethod(m.key)}
+                className={`w-full flex items-center gap-3 p-4 rounded-xl border transition-colors text-right disabled:opacity-50 ${
+                  active
+                    ? "border-[#c9a84c] bg-amber-50/60 ring-1 ring-[#c9a84c]/30"
+                    : "border-gray-200 hover:border-[#c9a84c] hover:bg-amber-50/40"
+                }`}
+              >
+                <div className={`w-10 h-10 rounded-lg flex items-center justify-center shrink-0 ${m.bg}`}>
+                  <Icon className={`w-5 h-5 ${m.color}`} />
+                </div>
+                <div className="flex-1">
+                  <p className="text-sm font-semibold text-gray-800">{m.label}</p>
+                  <p className="text-xs text-gray-400 mt-0.5">{m.desc}</p>
+                </div>
+                <span
+                  className={`w-5 h-5 rounded-full border-2 flex items-center justify-center shrink-0 ${
+                    active ? "border-[#c9a84c] bg-[#c9a84c]" : "border-gray-300"
+                  }`}
+                >
+                  {active && (
+                    <svg className="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                    </svg>
+                  )}
+                </span>
+              </button>
+            );
+          })}
         </div>
 
-        <ModalField label="المبلغ المسترد (ريال)">
-          <input
-            type="number"
-            min="0"
-            step="0.01"
-            placeholder="ادخل المبلغ"
-            value={form.amount}
-            onChange={(e) => setForm({ ...form, amount: e.target.value })}
-            className={modalInputClass}
-            disabled={isSubmitting}
-            dir="ltr"
-          />
-        </ModalField>
-
-        <ModalField label="طريقة الاسترداد">
-          <select
-            value={form.method}
-            onChange={(e) => setForm({ ...form, method: e.target.value })}
-            className={modalInputClass}
-            disabled={isSubmitting}
-          >
-            <option value="">اختر طريقة الاسترداد</option>
-            {REFUND_METHODS.map((m) => (
-              <option key={m} value={m}>{m}</option>
-            ))}
-          </select>
-        </ModalField>
-
-        {isBank && (
+        {method && (
           <>
-            <ModalField label="بيانات التحويل البنكي">
-              <input
-                type="text"
-                placeholder="اسم صاحب الحساب"
-                value={form.accountName}
-                onChange={(e) => setForm({ ...form, accountName: e.target.value })}
-                className={modalInputClass}
-                disabled={isSubmitting}
-              />
-            </ModalField>
-            <div className="space-y-2 rounded-xl border border-gray-100 bg-gray-50/80 p-3">
-              <p className="text-xs font-semibold text-[#c9a84c] text-right">إضافة حساب بنكي</p>
-              <input
-                type="text"
-                placeholder="رقم الآيبان"
-                value={form.iban}
-                onChange={(e) => setForm({ ...form, iban: e.target.value })}
-                className={modalInputClass}
-                disabled={isSubmitting}
-                dir="ltr"
-              />
-              <input
-                type="text"
-                placeholder="البنك المحول له"
-                value={form.bankTo}
-                onChange={(e) => setForm({ ...form, bankTo: e.target.value })}
-                className={modalInputClass}
-                disabled={isSubmitting}
-              />
-              <input
-                type="text"
-                placeholder="اسم البنك"
-                value={form.bankName}
-                onChange={(e) => setForm({ ...form, bankName: e.target.value })}
-                className={modalInputClass}
-                disabled={isSubmitting}
-              />
+            <div className="bg-gray-50 rounded-xl p-4 space-y-2.5">
+              <div className="flex items-center justify-between gap-3 text-sm">
+                <span className="text-gray-800 font-semibold">{fmtMoney(tripPrice)} ر.س</span>
+                <span className="text-gray-500 shrink-0">سعر الرحلة</span>
+              </div>
+              <div className="flex items-center justify-between gap-3 text-sm border-t border-gray-200 pt-2.5">
+                <span className="text-green-700 font-semibold">{fmtMoney(amountPaid)} ر.س</span>
+                <span className="text-gray-500 shrink-0">المبلغ المدفوع</span>
+              </div>
+            </div>
+
+            <div className="bg-white border border-gray-200 rounded-xl p-4">
+              <p className="text-sm font-semibold text-gray-700 text-right mb-3">معالجة استرداد</p>
+              <ModalField label="المبلغ المسترد (ر.س)" required>
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  placeholder="ادخل المبلغ المسترد"
+                  value={amount}
+                  onChange={(e) => setAmount(e.target.value)}
+                  className={modalInputClass}
+                  disabled={isSubmitting}
+                  dir="ltr"
+                  autoFocus
+                />
+              </ModalField>
+              <ModalField label="ملاحظات" hint="اختياري">
+                <textarea
+                  rows={2}
+                  placeholder="أضف ملاحظة (اختياري)"
+                  value={notes}
+                  onChange={(e) => setNotes(e.target.value)}
+                  className={`${modalInputClass} resize-none`}
+                  disabled={isSubmitting}
+                />
+              </ModalField>
             </div>
           </>
         )}
-
-        <ModalField label="سبب الاسترداد">
-          <textarea
-            rows={3}
-            placeholder="ادخل سبب الاسترداد أو أي ملاحظات إضافية"
-            value={form.reason}
-            onChange={(e) => setForm({ ...form, reason: e.target.value })}
-            className={`${modalInputClass} resize-none`}
-            disabled={isSubmitting}
-          />
-        </ModalField>
       </div>
 
       <div className="mt-5">
         <ModalActions
-          primaryLabel="معالجة الاسترداد"
+          primaryLabel="تم"
           onPrimary={handleSubmit}
           onSecondary={onClose}
           isSubmitting={isSubmitting}
+          primaryDisabled={!method || !amount}
         />
       </div>
     </AppModal>

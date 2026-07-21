@@ -17,6 +17,7 @@ export function normalizeMediaUrl(url) {
   if (url == null || url === "") return "";
   const s = String(url).trim().replace(/\\/g, "/");
   if (!s) return "";
+  if (/^data:/i.test(s) || /^blob:/i.test(s)) return s;
   if (/^https?:\/\//i.test(s)) {
     return s
       .replace(/^https?:\/\/drivo\.elmoroj\.com/i, MEDIA_HOST)
@@ -33,6 +34,7 @@ export function normalizeMediaUrl(url) {
 export function mediaUrlCandidates(url) {
   const raw = String(url ?? "").trim().replace(/\\/g, "/");
   if (!raw) return [];
+  if (/^data:/i.test(raw) || /^blob:/i.test(raw)) return [raw];
 
   const primary = normalizeMediaUrl(raw);
   const candidates = [primary];

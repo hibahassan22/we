@@ -37,6 +37,7 @@ const EMPTY_FORM = {
   bank_id: "",
   bank_name: "",
   commission_transfer_date: "",
+  transferred_amount: "",
   notes: "",
   transfer_image: null,
   sales_id: "",
@@ -354,6 +355,7 @@ export default function AssignTripModal({
   driverName,
   tripTotalPrice,
   onSuccess,
+  zIndex,
 }) {
   const toast = useToast();
   const { can } = usePermissions();
@@ -704,6 +706,7 @@ export default function AssignTripModal({
       if (form.commission_transfer_date) fd.append("payment_date", form.commission_transfer_date);
       const senderName = resolveSenderName();
       if (senderName) fd.append("sender_name", senderName);
+      if (form.transferred_amount) fd.append("transferred_amount", form.transferred_amount);
       if (form.notes) fd.append("notes", form.notes);
       if (form.transfer_image) fd.append("transfer_image", form.transfer_image);
       if (form.sales_id) fd.append("sales_id", form.sales_id);
@@ -842,6 +845,7 @@ export default function AssignTripModal({
         title="تأكيد الإسناد"
         isSubmitting={loading}
         size="sm"
+        zIndex={zIndex}
       >
         <p className="text-sm text-gray-700 text-center py-2 leading-relaxed">
           هل تريد إسناد الرحلة #{resolvedTripId}
@@ -877,6 +881,7 @@ export default function AssignTripModal({
         title="إسناد رحلة"
         subtitle={fromDriverPage && driverName ? `السائق: ${driverName}` : undefined}
         size="lg"
+        zIndex={zIndex}
         footer={
           <button
             type="button"
@@ -1130,24 +1135,27 @@ export default function AssignTripModal({
                 {renderSenderField("اسم المرسل")}
                 <ModalField label="اسم المستلم">
                   <div className="flex gap-2 mb-2">
-                    {["استرداد", "بعمولة"].map((mode) => (
+                    {[
+                      { value: "استرداد", label: "استرداد" },
+                      { value: "بعمولة", label: "عمولة وسيط" },
+                    ].map(({ value, label }) => (
                       <button
-                        key={mode}
+                        key={value}
                         type="button"
                         onClick={() =>
                           setForm((p) => ({
                             ...p,
-                            recipient_mode: mode,
+                            recipient_mode: value,
                             recipient_driver_id: "",
                           }))
                         }
                         className={`flex-1 py-2.5 rounded-xl text-sm font-bold transition-colors ${
-                          form.recipient_mode === mode
+                          form.recipient_mode === value
                             ? "bg-[#c9a84c] text-white shadow-sm"
                             : "border border-gray-200 text-gray-600 hover:bg-gray-50"
                         }`}
                       >
-                        {mode}
+                        {label}
                       </button>
                     ))}
                   </div>
@@ -1159,14 +1167,27 @@ export default function AssignTripModal({
                       canAddDriver={false}
                       value={form.recipient_driver_id}
                       onChange={(id) => set("recipient_driver_id", id)}
-                      placeholder={`ابحث عن مستلم (${form.recipient_mode})...`}
+                      placeholder={`ابحث عن مستلم (${form.recipient_mode === "بعمولة" ? "عمولة وسيط" : form.recipient_mode})...`}
                     />
                   ) : (
-                    <p className="text-xs text-gray-400 text-right">اختر استرداد أو بعمولة أولاً</p>
+                    <p className="text-xs text-gray-400 text-right">اختر استرداد أو عمولة وسيط أولاً</p>
                   )}
                 </ModalField>
               </div>
             )}
+
+            <ModalField label="المبلغ المحول">
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                placeholder="ادخل المبلغ المحول"
+                value={form.transferred_amount}
+                onChange={(e) => set("transferred_amount", e.target.value)}
+                className={inputCls}
+                dir="ltr"
+              />
+            </ModalField>
 
             <ModalField label="ملاحظات" hint="اختياري">
               <textarea

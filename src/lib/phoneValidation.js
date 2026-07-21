@@ -166,13 +166,19 @@ export function maskPhone(phone) {
   return `••••${digits.slice(-4)}`;
 }
 
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/i;
+
 export function validateEmail(email) {
-  const value = String(email ?? "").trim();
-  if (!value) return { valid: false, message: "البريد الإلكتروني مطلوب" };
-  if (!EMAIL_RE.test(value)) {
+  try {
+    const value = String(email ?? "").trim();
+    if (!value) return { valid: false, message: "البريد الإلكتروني مطلوب" };
+    if (!EMAIL_RE.test(value)) {
+      return { valid: false, message: "أدخل بريداً إلكترونياً صحيحاً" };
+    }
+    return { valid: true, normalized: value.toLowerCase() };
+  } catch {
     return { valid: false, message: "أدخل بريداً إلكترونياً صحيحاً" };
   }
-  return { valid: true, normalized: value.toLowerCase() };
 }
 
 export const SAUDI_IBAN_DIGITS = 22;

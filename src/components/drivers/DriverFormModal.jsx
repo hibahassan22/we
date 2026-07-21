@@ -246,12 +246,17 @@ export default function DriverFormModal({ isOpen, onClose, driverData, onSaved, 
         name: driverData.name||"", phone: normalizeSaudiPhoneForInputFiveStart(driverData.phone||""),
         address: driverData.address||"", nationality: driverData.nationality||"",
         gender: normalizeGender(driverData.gender), email: driverData.email||"",
-        bank_name: driverData.bank_name || "",
-        account_owner: driverData.account_owner || "",
-        bank_account_number: driverData.bank_account_number || "",
+        bank_name: driverData.bank_name || driverData.bank_status || "",
+        account_owner: driverData.account_owner || driverData.account_holder_name || "",
+        bank_account_number:
+          driverData.bank_account_number
+          || driverData.driver_bank_account_number
+          || "",
         iban: ibanDigitsFromApi(driverData.iban),
         banking_status: banking.bankingStatus,
-        balance: String(banking.balance),
+        balance: String(
+          banking.balance ?? driverData.wallet_balance ?? driverData.balance ?? 0
+        ),
         car_type: driverData.car_type||"", car_model: driverData.car_model||"",
         vehicle_size: driverData.vehicle_size||""
       });
@@ -278,12 +283,12 @@ export default function DriverFormModal({ isOpen, onClose, driverData, onSaved, 
   const isGenderSelected = GENDER_OPTIONS.includes(form.gender);
 
   const phoneValidation = useMemo(() => validatePhoneTenDigitsFiveStart(form.phone), [form.phone]);
-  const emailValidation = useMemo(() => validateEmail(form.email), [form.email]);
+  const emailValidation = useMemo(() => validateEmail(form.email ?? ""), [form.email]);
   const ibanValidation = useMemo(() => validateSaudiIban(form.iban), [form.iban]);
 
-  const phoneInvalid = form.phone.length > 0 && !phoneValidation.valid;
-  const emailInvalid = form.email.trim().length > 0 && !emailValidation.valid;
-  const ibanInvalid = form.iban.length > 0 && !ibanValidation.valid;
+  const phoneInvalid = String(form.phone ?? "").length > 0 && !phoneValidation.valid;
+  const emailInvalid = String(form.email ?? "").trim().length > 0 && !emailValidation.valid;
+  const ibanInvalid = String(form.iban ?? "").length > 0 && !ibanValidation.valid;
   const bankingValid =
     form.banking_status === "مؤهل" ||
     (form.banking_status === "غير مؤهل" && Number(form.balance) > 0);
@@ -344,31 +349,82 @@ export default function DriverFormModal({ isOpen, onClose, driverData, onSaved, 
     setSaving(true);
     try {
       let url;
-      const { banking_status: bankingStatus, balance, ...driverFields } = form;
+      const { banking_status: bankingStatus, balance, account_owner, bank_account_number, ...driverFields } = form;
+      const walletBalance = bankingStatus === "غير مؤهل" ? Number(balance) || 0 : Number(balance) || 0;
       const apiForm = {
         ...driverFields,
         phone: phoneValidation.normalized ?? form.phone,
         email: emailValidation.normalized ?? form.email,
         iban: ibanValidation.normalized ?? form.iban,
         gender: genderToApiValue(form.gender),
+        // الحقول المالية حسب الـ API (create / update)
+        account_owner,
+        account_holder_name: account_owner,
+        bank_account_number,
+        driver_bank_account_number: bank_account_number,
+        wallet_balance: walletBalance,
+        bank_status: bankingStatus,
+        banking_status: bankingStatus,
+        balance: walletBalance,
       };
 
       if (isEditing) {
-        // تعديل سائق — FormData عشان الصور
+        // تعديل سائق — FormData عشان الصور + الحقول المالية
         url = `${BASE}/driverstest/update/${driverData.id}`;
         const fd = new FormData();
-        Object.entries(apiForm).forEach(([k,v]) => { if(v) fd.append(k, v); });
-        Object.entries(fileMap).forEach(([k,file]) => { if(file) fd.append(k, file); });
-        const res = await fetch(url, { method: "POST", body: fd });
+        // الحقول المالية لازم تتبعت حتى لو الرصيد 0
+        const financialKeys = new Set([
+          "wallet_balance",
+          "balance",
+          "bank_status",
+          "banking_status",
+          "account_owner",
+          "account_holder_name",
+          "bank_account_number",
+          "driver_bank_account_number",
+          "bank_name",
+          "iban",
+        ]);
+        Object.entries(apiForm).forEach(([k, v]) => {
+          if (financialKeys.has(k)) {
+            fd.append(k, v == null ? "" : String(v));
+            return;
+          }
+          if (v !== "" && v !== null && v !== undefined) fd.append(k, v);
+        });
+        Object.entries(fileMap).forEach(([k, file]) => { if (file) fd.append(k, file); });
+        const res = await fetch(url, {
+          method: "POST",
+          headers: { Accept: "application/json" },
+          body: fd,
+        });
         if (res.ok || res.status < 500) {
           saveDriverBankingData(driverData.id, {
             bankingStatus,
-            balance: bankingStatus === "غير مؤهل" ? balance : 0,
+            balance: walletBalance,
           });
           setSuccess(true);
-          onSaved();
+          onSaved({
+            ...(driverData || {}),
+            ...apiForm,
+            id: driverData.id,
+            wallet_balance: walletBalance,
+            bank_status: bankingStatus,
+            banking_status: bankingStatus,
+            account_holder_name: account_owner,
+            driver_bank_account_number: bank_account_number,
+          });
           onToast?.("success", "تم تعديل بيانات السائق بنجاح");
           setTimeout(() => { setSuccess(false); onClose(); }, 800);
+        } else {
+          const err = await res.json().catch(() => ({}));
+          const msg =
+            (typeof err?.errors === "object"
+              ? Object.values(err.errors).flat().join(" — ")
+              : null) ||
+            err?.message ||
+            "حدث خطأ أثناء التعديل";
+          onToast?.("error", msg);
         }
       } else {
         url = `${BASE}/drivers`;
@@ -416,7 +472,7 @@ export default function DriverFormModal({ isOpen, onClose, driverData, onSaved, 
 
           saveDriverBankingData(driverId, {
             bankingStatus,
-            balance: bankingStatus === "غير مؤهل" ? balance : 0,
+            balance: walletBalance,
           });
           setSuccess(true);
           onSaved(createdDriver ?? { id: driverId, name: form.name, phone: apiForm.phone });
@@ -512,7 +568,6 @@ export default function DriverFormModal({ isOpen, onClose, driverData, onSaved, 
                   setForm((current) => ({
                     ...current,
                     banking_status: status,
-                    balance: status === "مؤهل" ? "0" : current.balance,
                   }));
                 }}
                 options={["مؤهل", "غير مؤهل"]}
@@ -520,16 +575,15 @@ export default function DriverFormModal({ isOpen, onClose, driverData, onSaved, 
                 required
               />
               <FormField
-                label="الرصيد"
+                label="رصيد المحفظة"
                 value={form.balance}
                 onChange={u("balance")}
                 type="number"
                 placeholder="0"
                 required={form.banking_status === "غير مؤهل"}
                 inputMode="decimal"
-                disabled={form.banking_status === "مؤهل"}
                 invalid={form.banking_status === "غير مؤهل" && Number(form.balance) <= 0}
-                hint={form.banking_status === "مؤهل" ? "الرصيد صفر للسائق المؤهل" : "أدخل قيمة المديونية"}
+                hint={form.banking_status === "غير مؤهل" ? "أدخل قيمة المديونية / الرصيد" : "رصيد المحفظة (wallet_balance)"}
               />
             </div>
             <FormField label="اسم البنك" value={form.bank_name} onChange={u("bank_name")} placeholder="ادخل اسم البنك" required={!isEditing} />

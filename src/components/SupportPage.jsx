@@ -13,7 +13,11 @@ import {
   resolveDriverIdFromChat,
   formatChatTime,
   driverDisplayName,
+  tripChatDisplayText,
+  tripChatPreviewText,
+  tripMessageImages,
 } from "../services/tripChatService.js";
+import ChatMediaImage from "./ui/ChatMediaImage.jsx";
 
 const BASE = "https://drivo1.elmoroj.com/api";
 
@@ -630,7 +634,7 @@ export default function SupportPage() {
                       <h5 className="text-xs font-bold text-gray-800 mb-0.5">{name}</h5>
                       <p className="text-[10px] text-[#b58f37] mb-1">رحلة #{chat.tripId}</p>
                       <p className={`text-[11px] truncate ${isSel ? "text-gray-500" : "text-gray-400"}`}>
-                        {chat.lastMessage || "—"}
+                        {tripChatPreviewText(chat.lastMessage) || "—"}
                       </p>
                     </div>
                     <div className="w-9 h-9 rounded-full bg-gradient-to-br from-[#9C6402] to-[#E6C76A] text-white flex items-center justify-center text-xs font-bold shrink-0 border border-gray-100">
@@ -666,10 +670,19 @@ export default function SupportPage() {
                   ) : (
                     messages.map((msg) => {
                       const isMe = String(msg.sender_id) === String(myId);
+                      const displayText = tripChatDisplayText(msg.message);
+                      const images = tripMessageImages(msg);
                       return (
                         <div key={msg.id} className={`flex flex-col max-w-[70%] ${isMe ? "self-end items-end" : "self-start items-start"}`}>
                           <div className={`p-4 rounded-[22px] text-xs leading-relaxed shadow-sm ${isMe ? "bg-[#575351] text-white rounded-bl-none text-right" : "bg-[#f4f3f1] text-gray-700 rounded-br-none text-right"}`}>
-                            <p className="font-medium whitespace-pre-wrap break-words">{msg.message}</p>
+                            {displayText && <p className="font-medium whitespace-pre-wrap break-words">{displayText}</p>}
+                            {images.length > 0 && (
+                              <div className={`grid gap-1.5 ${images.length > 1 ? "grid-cols-2" : "grid-cols-1"} ${displayText ? "mt-2" : ""}`}>
+                                {images.map((url, idx) => (
+                                  <ChatMediaImage key={idx} src={url} className="w-full max-h-40 object-cover rounded-lg" />
+                                ))}
+                              </div>
+                            )}
                             <div className={`text-[9px] mt-2 flex items-center gap-0.5 ${isMe ? "text-gray-300 justify-end" : "text-gray-400 justify-start"}`}>
                               <span>{formatChatTime(msg.created_at)}</span>
                               {isMe && <span className="text-emerald-400">✓✓</span>}

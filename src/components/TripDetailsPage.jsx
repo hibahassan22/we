@@ -828,6 +828,7 @@ export default function TripDetailsPage() {
         tripId={tripId}
         driverId={trip.driver?.id ?? trip.driver_id}
         amountPaid={paid}
+        tripPrice={total}
         onSuccess={() => fetchTrip({ silent: true })}
       />
       <TripChangeStatusModal

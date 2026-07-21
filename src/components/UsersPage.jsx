@@ -1,11 +1,11 @@
 ﻿import { useState, useEffect, useMemo, useCallback } from "react";
+import { Users } from "lucide-react";
 import { useAuthContext } from "../context/AuthContext.jsx";
 import { useToast } from "../lib/toast.jsx";
 import { usePermissions } from "../hooks/usePermissions.js";
 import { PERMISSIONS } from "../lib/permissions.js";
-import { useGlobalSearch } from "../hooks/useGlobalSearch";
-import SalesUserForm from "./users/SalesUserForm.jsx";
-import UserDetailsModal from "./users/UserDetailsModal.jsx";
+import AccountWizardForm from "./users/AccountWizardForm.jsx";
+import AccountDetailsModal from "./users/AccountDetailsModal.jsx";
 import UserTable from "./users/UserTable.jsx";
 import AppModal from "./ui/AppModal";
 import {
@@ -19,46 +19,37 @@ import {
   findSalesByEmail,
   normalizeEmail,
 } from "../services/salesService.js";
+import {
+  ensureAccountMeta,
+  updateAccountMeta,
+  removeAccountMeta,
+  syncAccountMetaFromSales,
+  enrichUserWithAccount,
+  getAllAccountMeta,
+  groupUsersByAccount,
+} from "../services/accountRegistryService.js";
 import { fetchRoles } from "../services/roleService.js";
-import { buildRoleOptions, getRoleLabel, getDefaultRoleId, resolveApiRoleId } from "../lib/roleUtils.js";
-import { validateUserPhone } from "../lib/phoneValidation.js";
+import { buildRoleOptions, getDefaultRoleId, resolveApiRoleId } from "../lib/roleUtils.js";
+import { validateUserPhone, validatePhoneTenDigitsFiveStart, normalizeSaudiPhoneForInputFiveStart } from "../lib/phoneValidation.js";
 import { STATUS_LABELS, USER_STATUSES } from "../lib/roles.js";
 
 const PAGE_SIZE = 10;
 
-const selectCls = "h-11 w-full border border-gray-200 rounded-lg px-4 text-sm focus:border-[#c9a84c] focus:outline-none bg-white text-right appearance-none";
+const selectCls = "h-10 w-full border border-gray-200 rounded-lg px-4 text-sm focus:border-[#c9a84c] focus:outline-none bg-white text-right appearance-none";
 
-function FilterSelect({ value, onChange, children, className }) {
+function FilterSelect({ value, onChange, children, className = "" }) {
   return (
     <div className={`relative ${className}`}>
       <select value={value} onChange={(e) => onChange(e.target.value)} className={selectCls}>
         {children}
       </select>
       <div className="absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none text-gray-400">
-        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
         </svg>
       </div>
     </div>
   );
-}
-
-function SearchInput({ value, onChange, placeholder, className }){
-    return (
-        <div className={`relative ${className}`}>
-            <input
-              value={value}
-              onChange={onChange}
-              placeholder={placeholder}
-              className={`${selectCls} px-10`}
-            />
-            <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-gray-400">
-                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
-                </svg>
-            </div>
-        </div>
-    )
 }
 
 function UsersPageContent() {
@@ -71,19 +62,23 @@ function UsersPageContent() {
   const canView = can(PERMISSIONS.USERS_READ);
 
   const [salesUsers, setSalesUsers] = useState([]);
+  const [accountMeta, setAccountMeta] = useState({});
   const [apiRoles, setApiRoles] = useState([]);
   const [rolesLoading, setRolesLoading] = useState(true);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
 
-  const { searchQuery, setSearchQuery } = useGlobalSearch();
+  const [searchQuery, setSearchQuery] = useState("");
   const [filterRole, setFilterRole] = useState("");
   const [filterStatus, setFilterStatus] = useState("");
   const [page, setPage] = useState(1);
 
-  const [showCreate, setShowCreate] = useState(false);
+  const [showCreate, setShowCreate] = useState(true);
+  const [createStep, setCreateStep] = useState("account"); // "account" | "user"
+  const [accountDraft, setAccountDraft] = useState({ accountName: "", accountNumber: "" });
+  const [createUserFormKey, setCreateUserFormKey] = useState(0);
   const [editUser, setEditUser] = useState(null);
-  const [viewUserId, setViewUserId] = useState(null);
+  const [viewAccount, setViewAccount] = useState(null);
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [deletingId, setDeletingId] = useState(null);
 
@@ -91,9 +86,11 @@ function UsersPageContent() {
     setLoading(true);
     try {
       const list = await fetchSalesList();
+      syncAccountMetaFromSales(list);
+      setAccountMeta(getAllAccountMeta());
       setSalesUsers(list);
     } catch (err) {
-      toast.error(err.message || "فشل تحميل المستخدمين");
+      toast.error(err.message || "فشل تحميل الأكونتات");
       setSalesUsers([]);
     } finally {
       setLoading(false);
@@ -111,34 +108,80 @@ function UsersPageContent() {
 
   const roleOptions = useMemo(() => buildRoleOptions(apiRoles, { apiOnly: true }), [apiRoles]);
 
-  const users = useMemo(
-    () =>
-      filterSalesUsers(
-        salesUsers.map((sale) => salesRecordToUser(sale)),
-        { search: searchQuery, role: filterRole, status: filterStatus }
-      ),
-    [salesUsers, searchQuery, filterRole, filterStatus]
-  );
+  const users = useMemo(() => {
+    const base = filterSalesUsers(
+      salesUsers.map((sale) => salesRecordToUser(sale)),
+      { search: "", role: filterRole, status: filterStatus },
+    );
+    const enriched = base.map((u) => enrichUserWithAccount(u, accountMeta[String(u.uid ?? u.id)]));
+    const grouped = groupUsersByAccount(enriched);
 
-  const currentUserName = currentUser?.fullName ?? currentUser?.displayName ?? "مجهول";
-  const currentUserPosition = getRoleLabel(currentUser?.role, apiRoles);
+    const term = searchQuery.trim().toLowerCase();
+    if (!term) return grouped;
+
+    return grouped.filter((account) => {
+      const inAccount =
+        String(account.accountNumber ?? "").includes(term)
+        || account.accountName?.toLowerCase().includes(term)
+        || account.accountLabel?.toLowerCase().includes(term)
+        || account.accountPhoneDisplay?.includes(term);
+
+      const inMembers = (account.members ?? []).some(
+        (u) =>
+          u.fullName?.toLowerCase().includes(term)
+          || u.email?.toLowerCase().includes(term)
+          || String(u.phone ?? "").includes(term),
+      );
+
+      return inAccount || inMembers;
+    });
+  }, [salesUsers, searchQuery, filterRole, filterStatus, accountMeta]);
 
   const totalPages = Math.max(1, Math.ceil(users.length / PAGE_SIZE));
   const paged = users.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+  const pageStart = users.length ? (page - 1) * PAGE_SIZE + 1 : 0;
+  const pageEnd = Math.min(page * PAGE_SIZE, users.length);
 
-  const handleCreate = async (form) => {
+  const handleCreateUser = async (form) => {
+    if (!form.accountName?.trim()) {
+      toast.error("أدخل اسم الأكونت");
+      return;
+    }
+    const accountPhoneCheck = validatePhoneTenDigitsFiveStart(form.accountNumber);
+    if (!accountPhoneCheck.valid) {
+      toast.error(accountPhoneCheck.message || "أدخل رقم جوال سعودي صحيح للأكونت");
+      return;
+    }
+
+    if (form.linkExisting && form.existingUserId) {
+      setSubmitting(true);
+      try {
+        updateAccountMeta(form.existingUserId, {
+          accountName: form.accountName,
+          accountNumber: accountPhoneCheck.normalized,
+        });
+        setAccountMeta(getAllAccountMeta());
+        toast.success("تم ربط الموظف بالأكونت");
+        setCreateUserFormKey((k) => k + 1);
+        await loadSalesUsers();
+      } catch (err) {
+        toast.error(err.message || "فشل ربط الموظف");
+      } finally {
+        setSubmitting(false);
+      }
+      return;
+    }
+
     const email = normalizeEmail(form.email);
     const duplicate = findSalesByEmail(salesUsers, email);
     if (duplicate) {
-      toast.error(
-        `البريد «${email}» مسجّل مسبقاً للموظف «${duplicate.name || duplicate.id}» — استخدم بريداً آخر`
-      );
+      toast.error(`البريد «${email}» مسجّل مسبقاً`);
       return;
     }
 
     const loginEmail = normalizeEmail(currentUser?.email);
     if (loginEmail && email === loginEmail) {
-      toast.error("لا يمكن استخدام بريد تسجيل دخولك — أدخل بريداً آخر خاص بالموظف");
+      toast.error("لا يمكن استخدام بريد تسجيل دخولك");
       return;
     }
 
@@ -170,8 +213,13 @@ function UsersPageContent() {
         password: form.password,
         role_id: roleId,
       });
-      toast.success("تم إضافة الموظف بنجاح");
-      setShowCreate(false);
+      ensureAccountMeta(id, {
+        accountName: form.accountName,
+        accountNumber: accountPhoneCheck.normalized,
+      });
+      setAccountMeta(getAllAccountMeta());
+      toast.success("تم إضافة الموظف داخل الأكونت");
+      setCreateUserFormKey((k) => k + 1);
       await loadSalesUsers();
     } catch (err) {
       toast.error(err.message || "فشل إضافة الموظف");
@@ -204,11 +252,16 @@ function UsersPageContent() {
         email: editUser.email,
         role_id: roleId,
       });
-      toast.success("تم تحديث بيانات الموظف");
+      updateAccountMeta(staffId, {
+        accountName: form.accountName,
+        accountNumber: form.accountNumber,
+      });
+      setAccountMeta(getAllAccountMeta());
+      toast.success("تم تحديث الأكونت");
       setEditUser(null);
       await loadSalesUsers();
     } catch (err) {
-      toast.error(err.message || "فشل تحديث الموظف");
+      toast.error(err.message || "فشل تحديث الأكونت");
     } finally {
       setSubmitting(false);
     }
@@ -216,108 +269,201 @@ function UsersPageContent() {
 
   const handleDelete = async () => {
     if (!deleteTarget) return;
-    const id = deleteTarget.uid ?? deleteTarget.id;
-    setDeletingId(id);
+    const members = deleteTarget.members?.length
+      ? deleteTarget.members
+      : [deleteTarget];
+
+    setDeletingId(deleteTarget.accountKey ?? deleteTarget.uid ?? deleteTarget.id);
     setDeleteTarget(null);
     try {
-      await deleteSalesRecord(id);
-      toast.success("تم حذف الموظف بنجاح");
-      setSalesUsers((prev) => prev.filter((s) => String(s.id) !== String(id)));
+      for (const member of members) {
+        const id = member.uid ?? member.id;
+        await deleteSalesRecord(id);
+        removeAccountMeta(id);
+      }
+      setAccountMeta(getAllAccountMeta());
+      toast.success("تم حذف الأكونت بنجاح");
+      const deletedIds = new Set(members.map((m) => String(m.uid ?? m.id)));
+      setSalesUsers((prev) => prev.filter((s) => !deletedIds.has(String(s.id))));
     } catch (err) {
-      toast.error(err.message || "فشل حذف الموظف");
+      toast.error(err.message || "فشل حذف الأكونت");
     } finally {
       setDeletingId(null);
     }
   };
 
-  const handleViewFromDetails = (sale) => {
-    const user = salesRecordToUser(sale);
-    setViewUserId(null);
-    setEditUser(user);
+  const handleEditAccount = (account) => {
+    const firstMember = account.members?.[0] ?? account;
+    setEditUser({
+      ...firstMember,
+      accountName: account.accountName ?? firstMember.accountName,
+      accountNumber: account.accountNumber ?? firstMember.accountNumber,
+      members: account.members ?? [firstMember],
+    });
   };
 
-  return (
-    <div className="w-full space-y-4" dir="rtl">
-      <div className="bg-white rounded-2xl shadow-sm p-4 text-right">
-        <h1 className="text-xl font-bold text-[#c9a84c]">المستخدمين</h1>
-        <p className="text-xs text-gray-400 mt-0.5">
-          إدارة موظفي خدمة العملاء من نظام المبيعات — <span className="font-mono">GET /api/sales</span>
-        </p>
-      </div>
+  const openAddEmployeeToAccount = (account) => {
+    if (!account) return;
+    setEditUser(null);
+    setAccountDraft({
+      accountName: account.accountName ?? "",
+      accountNumber: normalizeSaudiPhoneForInputFiveStart(account.accountNumber ?? ""),
+    });
+    setCreateStep("user");
+    setCreateUserFormKey((k) => k + 1);
+    setShowCreate(true);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
 
-      <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-        <p className="text-sm font-bold text-gray-800">المستخدم الحالي</p>
-        <div className="text-right">
-          <p className="text-sm font-bold text-gray-800 break-words">{currentUserName}</p>
-          <span className="inline-block mt-1 text-xs font-normal text-[#c9a84c] bg-amber-50 border border-amber-200 px-2.5 py-0.5 rounded-full">
-            {currentUserPosition}
-          </span>
+  const handleRemoveMemberFromAccount = async (member) => {
+    if (!member) return;
+    const id = member.uid ?? member.id;
+    if (!id) return;
+    try {
+      await deleteSalesRecord(id);
+      removeAccountMeta(id);
+      setAccountMeta(getAllAccountMeta());
+      toast.success("تم حذف الموظف");
+      await loadSalesUsers();
+    } catch (err) {
+      toast.error(err.message || "فشل حذف الموظف");
+    }
+  };
+
+  // حدّث تفاصيل الأكونت المفتوحة بعد أي تحميل جديد
+  useEffect(() => {
+    if (!viewAccount) return;
+    const key = viewAccount.accountKey;
+    const fresh = users.find((a) => a.accountKey === key);
+    if (fresh) setViewAccount(fresh);
+  }, [users, viewAccount?.accountKey]);
+
+  const paginationNumbers = useMemo(() => {
+    const max = Math.min(totalPages, 5);
+    return Array.from({ length: max }, (_, i) => i + 1);
+  }, [totalPages]);
+
+  const createFormContent = createStep === "account" ? (
+    <AccountWizardForm
+      mode="account"
+      existingSales={salesUsers}
+      accountMeta={accountMeta}
+      roles={roleOptions}
+      rolesReady={!rolesLoading && roleOptions.length > 0}
+      defaultRoleId={getDefaultRoleId(apiRoles)}
+      loading={submitting}
+      initial={{ accountName: "", accountNumber: "" }}
+      onSubmit={(draft) => {
+        setAccountDraft({
+          accountName: draft.accountName,
+          accountNumber: draft.accountNumber,
+        });
+        setCreateStep("user");
+        setCreateUserFormKey((k) => k + 1);
+      }}
+      onCancel={() => {
+        setShowCreate(false);
+        setCreateStep("account");
+        setAccountDraft({ accountName: "", accountNumber: "" });
+      }}
+    />
+  ) : (
+    <AccountWizardForm
+      key={`user-${createUserFormKey}-${roleOptions.map((r) => r.id).join("-")}`}
+      mode="user"
+      accountDraft={accountDraft}
+      existingSales={salesUsers}
+      accountMeta={accountMeta}
+      roles={roleOptions}
+      rolesReady={!rolesLoading && roleOptions.length > 0}
+      defaultRoleId={getDefaultRoleId(apiRoles)}
+      loading={submitting}
+      showAddAnother
+      onAddAnother={() => setCreateUserFormKey((k) => k + 1)}
+      onSubmit={handleCreateUser}
+      onCancel={() => {
+        setShowCreate(false);
+        setCreateStep("account");
+        setAccountDraft({ accountName: "", accountNumber: "" });
+      }}
+    />
+  );
+
+  return (
+    <div className="w-full space-y-5 pb-8" dir="rtl">
+      {/* عنوان الصفحة */}
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+        <div className="flex items-center gap-2.5">
+          <Users className="w-6 h-6 text-[#9C6402]" />
+          <h1 className="text-xl font-bold text-gray-800">إدارة الأكونتات</h1>
+        </div>
+        <div className="relative w-full sm:max-w-xs">
+          <input
+            value={searchQuery}
+            onChange={(e) => {
+              setSearchQuery(e.target.value);
+              setPage(1);
+            }}
+            placeholder="بحث بالاسم أو رقم الأكونت..."
+            className="w-full h-10 border border-gray-200 rounded-lg pr-10 pl-4 text-sm text-right focus:border-[#c9a84c] focus:outline-none bg-white"
+          />
+          <div className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none">
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+            </svg>
+          </div>
         </div>
       </div>
 
-      <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 sm:p-5">
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
-          <h2 className="text-sm font-bold text-gray-800 text-right">
-            إضافة موظف جديد
-          </h2>
+      {/* نموذج إضافة أكونت */}
+      <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
+          <h2 className="text-sm font-bold text-gray-800">إضافة أكونت جديد</h2>
           <button
             type="button"
-            onClick={() => canCreate && setShowCreate((v) => !v)}
-            disabled={!canCreate}
-            className="w-full sm:w-auto flex items-center justify-center gap-1.5 bg-[#4a4644] text-white text-sm font-bold px-4 py-2.5 rounded-xl hover:bg-black transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            onClick={() => {
+              setShowCreate((v) => !v);
+              setCreateStep("account");
+              setAccountDraft({ accountName: "", accountNumber: "" });
+              setCreateUserFormKey((k) => k + 1);
+            }}
+            className="text-xs text-gray-500 hover:text-gray-700 border border-gray-200 px-3 py-1.5 rounded-lg"
           >
-            {showCreate ? "إخفاء النموذج" : "إضافة موظف"}
+            {showCreate ? "إخفاء النموذج" : "إظهار النموذج"}
           </button>
         </div>
         {showCreate && (
-          <div className="pt-2 border-t border-gray-50">
-            <SalesUserForm
-              key={`create-${roleOptions.map((r) => r.id).join("-")}`}
-              mode="create"
-              existingSales={salesUsers}
-              roles={roleOptions}
-              rolesReady={!rolesLoading && roleOptions.length > 0}
-              defaultRoleId={getDefaultRoleId(apiRoles)}
-              onSubmit={handleCreate}
-              loading={submitting}
-            />
+          <div className="p-5">
+            {canCreate ? (
+              createFormContent
+            ) : (
+              <p className="text-sm text-gray-400 text-center py-6">ليس لديك صلاحية إضافة أكونت</p>
+            )}
           </div>
         )}
       </div>
 
-      <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
-        <div className="p-4 sm:p-5 border-b border-gray-100 space-y-4">
-          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-            <h3 className="text-base font-bold text-gray-800 text-right">
-              سجل الموظفين
-              <span className="mr-2 text-sm font-normal text-gray-400">({users.length})</span>
-            </h3>
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-            <SearchInput
+      {/* سجل الأكونتات */}
+      <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+        <div className="px-5 py-4 border-b border-gray-100 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <h3 className="text-sm font-bold text-gray-800">
+            سجل الأكونتات
+            <span className="mr-2 text-gray-400 font-normal">({users.length})</span>
+          </h3>
+          <div className="flex flex-col sm:flex-row gap-2 sm:max-w-md w-full sm:w-auto">
+            <input
               value={searchQuery}
               onChange={(e) => {
                 setSearchQuery(e.target.value);
                 setPage(1);
               }}
-              placeholder="بحث بالاسم أو البريد أو الهاتف..."
-              className="sm:col-span-1"
+              placeholder="بحث سريع..."
+              className="h-10 border border-gray-200 rounded-lg px-4 text-sm text-right focus:border-[#c9a84c] focus:outline-none bg-white flex-1"
             />
-            <FilterSelect 
-              value={filterRole} 
-              onChange={(v) => { setFilterRole(v); setPage(1); }}
-              className="sm:col-span-1"
-            >
-              <option value="">جميع الأدوار</option>
-              {roleOptions.map((r) => (
-                <option key={r.id} value={r.id}>{r.name}</option>
-              ))}
-            </FilterSelect>
-            <FilterSelect 
-              value={filterStatus} 
+            <FilterSelect
+              value={filterStatus}
               onChange={(v) => { setFilterStatus(v); setPage(1); }}
-              className="sm:col-span-1"
+              className="sm:w-36"
             >
               <option value="">جميع الحالات</option>
               {Object.values(USER_STATUSES).map((key) => (
@@ -330,69 +476,84 @@ function UsersPageContent() {
         <UserTable
           users={paged}
           loading={loading}
-          apiOnly
+          accountsMode
           roles={roleOptions}
-          onView={canView ? (user) => setViewUserId(user.uid ?? user.id) : undefined}
-          onEdit={setEditUser}
-          onDelete={setDeleteTarget}
+          onView={canView ? setViewAccount : undefined}
+          onEdit={canEdit ? handleEditAccount : undefined}
+          onDelete={canDelete ? setDeleteTarget : undefined}
           canEdit={canEdit}
           canDelete={canDelete}
           deletingId={deletingId}
         />
 
-        {totalPages > 1 && (
-          <div className="flex flex-wrap justify-center gap-1.5 sm:gap-2 py-3 px-3 border-t border-gray-100">
-            <button
-              type="button"
-              onClick={() => setPage((p) => Math.max(1, p - 1))}
-              disabled={page === 1}
-              className="px-3 py-1.5 rounded-lg text-xs font-bold border border-gray-200 text-gray-600 disabled:opacity-40"
-            >
-              السابق
-            </button>
-            {Array.from({ length: totalPages }, (_, i) => i + 1).map((n) => (
-              <button
-                key={n}
-                type="button"
-                onClick={() => setPage(n)}
-                className={`min-w-[2rem] h-8 px-2 rounded-lg text-xs font-bold border transition-colors ${
-                  page === n
-                    ? "bg-[#c9a84c] text-white border-[#c9a84c]"
-                    : "border-gray-200 text-gray-600 hover:bg-gray-50"
-                }`}
-              >
-                {n}
-              </button>
-            ))}
-            <button
-              type="button"
-              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-              disabled={page === totalPages}
-              className="px-3 py-1.5 rounded-lg text-xs font-bold border border-gray-200 text-gray-600 disabled:opacity-40"
-            >
-              التالي
-            </button>
-          </div>
-        )}
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 px-5 py-4 border-t border-gray-100 bg-gray-50/40">
+          <p className="text-xs text-gray-500">
+            إظهار {pageStart}–{pageEnd} من أصل {users.length} أكونت
+          </p>
+          {totalPages > 1 && (
+            <div className="flex items-center gap-1">
+              {paginationNumbers.map((n) => (
+                <button
+                  key={n}
+                  type="button"
+                  onClick={() => setPage(n)}
+                  className={`min-w-[2rem] h-8 px-2 rounded text-xs font-bold transition-colors ${
+                    page === n
+                      ? "bg-[#9C6402] text-white"
+                      : "bg-white border border-gray-200 text-gray-600 hover:bg-gray-50"
+                  }`}
+                >
+                  {n}
+                </button>
+              ))}
+              {totalPages > 5 && (
+                <span className="text-xs text-gray-400 px-1">…</span>
+              )}
+            </div>
+          )}
+        </div>
       </div>
 
-      <UserDetailsModal
-        isOpen={!!viewUserId}
-        onClose={() => setViewUserId(null)}
-        userId={viewUserId}
+      <AccountDetailsModal
+        isOpen={!!viewAccount}
+        onClose={() => setViewAccount(null)}
+        account={viewAccount}
+        members={viewAccount?.members ?? []}
         roles={roleOptions}
-        onEdit={canEdit ? handleViewFromDetails : undefined}
+        existingSales={salesUsers}
+        accountMeta={accountMeta}
+        canAddEmployee={canCreate}
+        canDeleteEmployee={canDelete}
+        rolesReady={!rolesLoading && roleOptions.length > 0}
+        defaultRoleId={getDefaultRoleId(apiRoles)}
+        submitting={submitting}
+        onAddEmployeeSubmit={async (form) => {
+          const draft = {
+            ...form,
+            accountName: viewAccount?.accountName ?? form.accountName,
+            accountNumber: viewAccount?.accountNumber ?? form.accountNumber,
+          };
+          await handleCreateUser(draft);
+        }}
+        onRemoveMember={handleRemoveMemberFromAccount}
+        onAssignTo={(entry) => {
+          toast.success(`تم تعيين ${entry.userName} لمدة ${entry.days} يوم`);
+        }}
       />
 
       <AppModal
         isOpen={!!deleteTarget}
         onClose={() => setDeleteTarget(null)}
-        title="حذف الموظف"
+        title="حذف الأكونت"
         size="sm"
       >
         <div className="space-y-4 text-right" dir="rtl">
           <p className="text-sm text-gray-600">
-            هل أنت متأكد من حذف هذا الموظف؟ لا يمكن التراجع عن هذا الإجراء.
+            هل أنت متأكد من حذف هذا الأكونت
+            {(deleteTarget?.memberCount ?? deleteTarget?.members?.length ?? 1) > 1
+              ? ` وجميع الموظفين داخله (${deleteTarget.memberCount ?? deleteTarget.members.length})؟`
+              : "؟"}
+            {" "}لا يمكن التراجع عن هذا الإجراء.
           </p>
           <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2 pt-1">
             <button
@@ -416,19 +577,28 @@ function UsersPageContent() {
       <AppModal
         isOpen={!!editUser}
         onClose={() => setEditUser(null)}
-        title="تعديل الموظف"
+        title="تعديل الأكونت"
         isSubmitting={submitting}
         size="lg"
       >
         {editUser && (
-          <SalesUserForm
+          <AccountWizardForm
             mode="edit"
+            accountDraft={{ accountName: editUser.accountName, accountNumber: editUser.accountNumber }}
             initial={editUser}
             roles={roleOptions}
             rolesReady={!rolesLoading && roleOptions.length > 0}
+            defaultRoleId={getDefaultRoleId(apiRoles)}
+            existingSales={salesUsers}
+            accountMeta={accountMeta}
+            loading={submitting}
             onSubmit={handleEdit}
             onCancel={() => setEditUser(null)}
-            loading={submitting}
+            onAddEmployee={
+              canCreate
+                ? () => openAddEmployeeToAccount(editUser)
+                : undefined
+            }
           />
         )}
       </AppModal>

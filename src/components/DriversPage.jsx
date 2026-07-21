@@ -609,7 +609,16 @@ export default function DriversPage() {
         statusColor={statusColor}
         statuses={statuses}
       />
-      <DriverFormModal isOpen={modalState.type==="edit"} onClose={closeGlobalModal} driverData={modalState.driver} onSaved={fetchDrivers} onToast={(t,m)=>toast[t](m)}/>
+      <DriverFormModal
+        isOpen={modalState.type==="edit"}
+        onClose={closeGlobalModal}
+        driverData={modalState.driver}
+        onSaved={(updated) => {
+          if (updated?.id) handleDriverUpdated(updated);
+          fetchDrivers();
+        }}
+        onToast={(t,m)=>toast[t](m)}
+      />
       <DeleteConfirmModal isOpen={modalState.type==="delete"} onClose={closeGlobalModal} onConfirm={executeDelete} driverName={modalState.driver?.name} loading={deleteLoading}/>
     </>
   );

@@ -24,10 +24,11 @@ export async function createTripRefundRequest(payload) {
     body: JSON.stringify({
       trip_id: Number(payload.tripId),
       driver_id: String(payload.driverId ?? ""),
-      refund_reason: String(payload.refundReason ?? "").trim(),
+      refund_reason: String(payload.refundReason ?? payload.notes ?? "").trim(),
       proposed_refund_amount: Number(payload.proposedRefundAmount),
       refund_method: String(payload.refundMethod ?? "").trim(),
-      bank_transfer_details: String(payload.bankTransferDetails ?? "").trim(),
+      bank_transfer_details: String(payload.bankTransferDetails ?? payload.notes ?? "").trim(),
+      notes: String(payload.notes ?? payload.refundReason ?? "").trim(),
     }),
   });
   const json = await res.json().catch(() => ({}));

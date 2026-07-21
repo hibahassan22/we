@@ -181,6 +181,7 @@ export async function fetchBrokerTrips(id, signal) {
       remaining_amount: remaining,
       our_commission: Number(t.our_commission ?? 0) || 0,
       broker_commission: Number(t.broker_commission ?? 0) || 0,
+      date: t.trip_date ?? t.start_date ?? t.created_at ?? t.date ?? null,
     };
   });
 }

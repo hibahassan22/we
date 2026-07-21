@@ -30,6 +30,7 @@ const createEmptyForm = (totalPrice = "") => ({
   bank_id: "",
   bank_name: "",
   commission_transfer_date: "",
+  transferred_amount: "",
   payment_note: "",
   transfer_image: null,
   driver_balance: "",
@@ -602,7 +603,7 @@ export default function AddPaymentModal({ isOpen, onClose, tripId, tripTotalPric
     if (isOtherRecipient) {
       if (!validateTripOrOtherSender("المرسل")) return;
       if (!formData.recipient_mode) {
-        toast.error("اختر استرداد أو بعمولة");
+        toast.error("اختر استرداد أو عمولة وسيط");
         return;
       }
       if (!formData.recipient_driver_id) {
@@ -992,19 +993,22 @@ export default function AddPaymentModal({ isOpen, onClose, tripId, tripTotalPric
 
               <ModalField label="اسم المستلم" required>
                 <div className="flex gap-2 mb-2">
-                  {["استرداد", "بعمولة"].map((mode) => (
+                  {[
+                    { value: "استرداد", label: "استرداد" },
+                    { value: "بعمولة", label: "عمولة وسيط" },
+                  ].map(({ value, label }) => (
                     <button
-                      key={mode}
+                      key={value}
                       type="button"
-                      onClick={() => handleRecipientModeChange(mode)}
+                      onClick={() => handleRecipientModeChange(value)}
                       disabled={isSubmitting}
                       className={`flex-1 py-2.5 rounded-xl text-sm font-bold transition-colors disabled:opacity-50 ${
-                        formData.recipient_mode === mode
+                        formData.recipient_mode === value
                           ? "bg-[#c9a84c] text-white shadow-sm"
                           : "border border-gray-200 text-gray-600 hover:bg-gray-50"
                       }`}
                     >
-                      {mode}
+                      {label}
                     </button>
                   ))}
                 </div>
@@ -1016,14 +1020,28 @@ export default function AddPaymentModal({ isOpen, onClose, tripId, tripTotalPric
                     canAddDriver={false}
                     value={formData.recipient_driver_id}
                     onChange={handleRecipientDriverChange}
-                    placeholder={`ابحث عن مستلم (${formData.recipient_mode})...`}
+                    placeholder={`ابحث عن مستلم (${formData.recipient_mode === "بعمولة" ? "عمولة وسيط" : formData.recipient_mode})...`}
                   />
                 ) : (
-                  <p className="text-xs text-gray-400 text-right">اختر استرداد أو بعمولة أولاً</p>
+                  <p className="text-xs text-gray-400 text-right">اختر استرداد أو عمولة وسيط أولاً</p>
                 )}
               </ModalField>
             </div>
           )}
+
+          <ModalField label="المبلغ المحول">
+            <input
+              type="number"
+              min="0"
+              step="0.01"
+              placeholder="ادخل المبلغ المحول"
+              value={formData.transferred_amount}
+              onChange={(e) => set("transferred_amount", e.target.value)}
+              className={modalInputClass}
+              disabled={isSubmitting}
+              dir="ltr"
+            />
+          </ModalField>
 
           <ModalField label="ملاحظات" hint="اختياري">
             <textarea
